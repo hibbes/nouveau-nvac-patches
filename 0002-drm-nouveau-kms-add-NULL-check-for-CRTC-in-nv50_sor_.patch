@@ -1,0 +1,58 @@
+From d66edf6cbbd2624ca365f12262203ab7c46d1b23 Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
+Date: Thu, 9 Apr 2026 19:15:47 +0200
+Subject: [PATCH 2/3] drm/nouveau/kms: add NULL check for CRTC in
+ nv50_sor_atomic_disable
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+nv50_sor_atomic_disable() calls nv50_head(nv_encoder->crtc) without
+checking whether nv_encoder->crtc is NULL. Under Wayland compositors
+that use atomic modesetting, a race condition can occur between
+atomic_check and atomic_commit: the encoder's CRTC reference may
+become NULL after validation but before the disable callback runs.
+
+When this happens, nv50_head() receives a NULL drm_crtc pointer,
+and container_of() produces a garbage pointer, leading to a kernel
+crash (NULL pointer dereference or page fault).
+
+Add an explicit NULL check for nv_encoder->crtc before dereferencing.
+If the CRTC is already gone, release the output resource and return
+early — there is nothing left to disable.
+
+Note: checking nv50_head()'s return value would not work here because
+container_of(NULL, ...) never returns NULL; the bogus pointer must be
+prevented at the source.
+
+Tested on NVAC (MCP79) with Weston --backend=drm. Without this patch,
+switching VTs or closing a Wayland session triggers a kernel oops.
+With this patch, Wayland session teardown and DPMS cycles are stable.
+
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+---
+ drivers/gpu/drm/nouveau/dispnv50/disp.c | 8 +++++++-
+ 1 file changed, 7 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+index 6c3a8712d..42080874a 100644
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+@@ -1565,7 +1565,13 @@ static void
+ nv50_sor_atomic_disable(struct drm_encoder *encoder, struct drm_atomic_state *state)
+ {
+ 	struct nouveau_encoder *nv_encoder = nouveau_encoder(encoder);
+-	struct nv50_head *head = nv50_head(nv_encoder->crtc);
++	struct nv50_head *head;
++
++	if (!nv_encoder->crtc) {
++		nvif_outp_release(&nv_encoder->outp);
++		return;
++	}
++	head = nv50_head(nv_encoder->crtc);
+ #ifdef CONFIG_DRM_NOUVEAU_BACKLIGHT
+ 	struct nouveau_connector *nv_connector = nv50_outp_get_old_connector(state, nv_encoder);
+ 	struct nouveau_drm *drm = nouveau_drm(nv_encoder->base.base.dev);
+-- 
+2.52.0
+

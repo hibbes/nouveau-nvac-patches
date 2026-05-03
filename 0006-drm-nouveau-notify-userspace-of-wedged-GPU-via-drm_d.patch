@@ -1,0 +1,115 @@
+From 556b3b24313dc52525322a3bc7abd1645dc10939 Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
+Date: Sun, 3 May 2026 12:07:08 +0200
+Subject: [PATCH] drm/nouveau: notify userspace of wedged GPU via
+ drm_dev_wedged_event
+
+When nvkm_runl_rc() encounters an engine reset that fails, the GPU is
+left in an unrecoverable state. Userspace clients that poll debugfs
+(e.g. a load-based pstate daemon writing /sys/kernel/debug/dri/0/pstate)
+have no signal to tell them the engine is dead, and continue to schedule
+clock-reprogram work that loops in gt215_clk_pre() timeouts and stalls
+shutdown.
+
+Hook into the engine-reset failure path and emit the standard DRM
+device-wedged uevent with DRM_WEDGE_RECOVERY_REBIND. Clients subscribed
+to the drm uevent class (udev rule, session manager, pstate daemon) can
+then back off cleanly. The kernel reset retry behaviour is unchanged;
+this only adds an outbound notification.
+
+The new helper nouveau_drm_notify_wedged() lives in nouveau_drm.c so the
+nvkm code does not have to handle the dev_get_drvdata traversal itself.
+A precedent for nvkm code calling into nouveau_drm helpers exists in
+nvkm/subdev/clk/gk20a_devfreq.c.
+
+Reproduced on Apple Mac mini Late 2009 (NVAC, MCP79), where Chrome
+WebGL workloads can trigger TRAP_CCACHE / PT_NOT_PRESENT channel faults
+that the engine cannot reset.
+
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+---
+ drivers/gpu/drm/nouveau/nouveau_drm.c         | 20 +++++++++++++++++++
+ drivers/gpu/drm/nouveau/nouveau_drv.h         |  1 +
+ .../gpu/drm/nouveau/nvkm/engine/fifo/runl.c   | 16 +++++++++++++--
+ 3 files changed, 35 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/nouveau/nouveau_drm.c b/drivers/gpu/drm/nouveau/nouveau_drm.c
+index 915f73279302..b32506455747 100644
+--- a/drivers/gpu/drm/nouveau/nouveau_drm.c
++++ b/drivers/gpu/drm/nouveau/nouveau_drm.c
+@@ -926,6 +926,26 @@ nouveau_drm_device_remove(struct nouveau_drm *drm)
+ 	nvkm_device_del(&device);
+ }
+ 
++/**
++ * nouveau_drm_notify_wedged - emit a DRM device-wedged uevent.
++ * @device: nvkm device whose engine has entered an unrecoverable state
++ *
++ * Called from low-level recovery paths (e.g. nvkm_runl_rc()) when an engine
++ * reset has failed and the GPU cannot be brought back without rebinding the
++ * driver. Userspace clients that subscribe to the drm uevent class can react
++ * (e.g. a load-based pstate daemon stops poking debugfs after seeing this).
++ */
++void
++nouveau_drm_notify_wedged(struct nvkm_device *device)
++{
++	struct nouveau_drm *drm = dev_get_drvdata(device->dev);
++
++	if (!drm || !drm->dev)
++		return;
++
++	drm_dev_wedged_event(drm->dev, DRM_WEDGE_RECOVERY_REBIND, NULL);
++}
++
+ static void
+ nouveau_drm_remove(struct pci_dev *pdev)
+ {
+diff --git a/drivers/gpu/drm/nouveau/nouveau_drv.h b/drivers/gpu/drm/nouveau/nouveau_drv.h
+index 1c2523e2f92e..5e1dc4b9da63 100644
+--- a/drivers/gpu/drm/nouveau/nouveau_drv.h
++++ b/drivers/gpu/drm/nouveau/nouveau_drv.h
+@@ -336,6 +336,7 @@ struct drm_device *
+ nouveau_platform_device_create(const struct nvkm_device_tegra_func *,
+ 			       struct platform_device *, struct nvkm_device **);
+ void nouveau_drm_device_remove(struct nouveau_drm *);
++void nouveau_drm_notify_wedged(struct nvkm_device *);
+ 
+ #define NV_PRINTK(l,c,f,a...) do {                                             \
+ 	struct nouveau_cli *_cli = (c);                                        \
+diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/runl.c b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/runl.c
+index 2092521053ef..d90568a4ad5e 100644
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/runl.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/runl.c
+@@ -28,6 +28,8 @@
+ 
+ #include <core/gpuobj.h>
+ #include <subdev/timer.h>
++
++#include "nouveau_drv.h"
+ #include <subdev/top.h>
+ 
+ static struct nvkm_cgrp *
+@@ -113,8 +115,18 @@ nvkm_runl_rc(struct nvkm_runl *runl)
+ 		}
+ 
+ 		ENGN_DEBUG(engn, "resetting...");
+-		/*TODO: can we do something less of a potential catastrophe on failure? */
+-		WARN_ON(nvkm_engine_reset(engn->engine));
++		if (nvkm_engine_reset(engn->engine)) {
++			WARN_ON(1);
++			/*
++			 * Engine reset failed - the GPU is in an unrecoverable
++			 * state. Tell userspace via the drm device-wedged
++			 * uevent so subscribers (e.g. a load-based pstate
++			 * daemon) can stop poking debugfs and a session manager
++			 * can plan a rebind. See Documentation/gpu/drm-uapi.rst
++			 * "Device Wedging" for the uAPI contract.
++			 */
++			nouveau_drm_notify_wedged(engn->engine->subdev.device);
++		}
+ 	}
+ 
+ 	/* Submit runlist update, and clear any remaining exception state. */
+-- 
+2.53.0
+

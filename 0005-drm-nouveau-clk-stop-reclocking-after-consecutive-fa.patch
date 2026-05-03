@@ -1,0 +1,88 @@
+From a7a23cd2e0ed7ceb8c8885761b2fe87f358e318a Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
+Date: Sun, 26 Apr 2026 22:46:33 +0200
+Subject: [PATCH] drm/nouveau/clk: stop reclocking after consecutive failures
+
+When the GPU enters an unrecoverable state (for example after a graphics
+fault wedges a channel), gt215_clk_pre() repeatedly times out waiting
+for the FIFO to idle, returning -EIO from nvkm_pstate_prog() each time.
+
+Userspace clients (e.g. a load-based pstate daemon writing to
+/sys/kernel/debug/dri/0/pstate) keep triggering nvkm_pstate_calc(),
+which schedules the work item again and again. Each iteration emits a
+WARN_ON in gt215_clk_pre() and a stack trace into dmesg, hammers the
+already-faulted hardware, and causes orderly shutdowns to stall in the
+hung clk workqueue, frequently forcing a hard reset.
+
+Track consecutive nvkm_pstate_prog() failures. After
+NVKM_CLK_PROG_FAIL_LIMIT (3) failures, mark the subsystem wedged and
+make nvkm_pstate_calc() return -EIO without scheduling further work.
+The userspace pstate write then receives an I/O error instead of
+silently re-queuing a doomed reclock, and the work item stops issuing
+register accesses to the dead engine. A successful prog resets the
+counter, so transient errors do not latch.
+
+Reproduced on Apple Mac Mini (MCP79, NVAC 0xac080b1) where a Chrome GPU
+channel fault (TRAP_CCACHE / PT_NOT_PRESENT, NV50 Tesla 3D class) led
+to repeating gt215_clk_pre+0x204 timeouts from nvkm_pstate_work and a
+shutdown that hung for ~3 minutes before a forced reset.
+
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+---
+ drivers/gpu/drm/nouveau/include/nvkm/subdev/clk.h |  2 ++
+ drivers/gpu/drm/nouveau/nvkm/subdev/clk/base.c    | 12 ++++++++++++
+ 2 files changed, 14 insertions(+)
+
+diff --git a/drivers/gpu/drm/nouveau/include/nvkm/subdev/clk.h b/drivers/gpu/drm/nouveau/include/nvkm/subdev/clk.h
+index 6a09d397c651..f185fd3ffd89 100644
+--- a/drivers/gpu/drm/nouveau/include/nvkm/subdev/clk.h
++++ b/drivers/gpu/drm/nouveau/include/nvkm/subdev/clk.h
+@@ -92,6 +92,8 @@ struct nvkm_clk {
+ 	struct work_struct work;
+ 	wait_queue_head_t wait;
+ 	atomic_t waiting;
++	unsigned int prog_fails;
++	bool wedged;
+ 
+ 	int pwrsrc;
+ 	int pstate; /* current */
+diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/clk/base.c b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/base.c
+index 572e63846315..7c5e2b645d2d 100644
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/clk/base.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/clk/base.c
+@@ -296,6 +296,8 @@ nvkm_pstate_prog(struct nvkm_clk *clk, int pstatei)
+ 	return nvkm_cstate_prog(clk, pstate, NVKM_CLK_CSTATE_HIGHEST);
+ }
+ 
++#define NVKM_CLK_PROG_FAIL_LIMIT 3
++
+ static void
+ nvkm_pstate_work(struct work_struct *work)
+ {
+@@ -326,6 +328,14 @@ nvkm_pstate_work(struct work_struct *work)
+ 		if (ret) {
+ 			nvkm_error(subdev, "error setting pstate %d: %d\n",
+ 				   pstate, ret);
++			if (++clk->prog_fails >= NVKM_CLK_PROG_FAIL_LIMIT) {
++				clk->wedged = true;
++				nvkm_warn(subdev,
++					  "wedged after %u consecutive reclock failures; refusing further reclocks\n",
++					  clk->prog_fails);
++			}
++		} else {
++			clk->prog_fails = 0;
+ 		}
+ 	}
+ 
+@@ -335,6 +345,8 @@ nvkm_pstate_work(struct work_struct *work)
+ static int
+ nvkm_pstate_calc(struct nvkm_clk *clk, bool wait)
+ {
++	if (clk->wedged)
++		return -EIO;
+ 	atomic_set(&clk->waiting, 1);
+ 	schedule_work(&clk->work);
+ 	if (wait)
+-- 
+2.53.0
+

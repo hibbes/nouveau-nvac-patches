@@ -1,0 +1,53 @@
+From d14a3f54830eb96a095463c09b2a0adee0af0da4 Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
+Date: Thu, 9 Apr 2026 19:15:55 +0200
+Subject: [PATCH 3/3] drm/nouveau/dp: retry link check once on HPD IRQ before
+ disconnect
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+On NV50/G94-family chipsets with DisplayPort, transient link glitches
+can trigger an HPD IRQ where the first nouveau_dp_link_check() fails
+momentarily. The driver then falls through to connector status
+re-detection, treating it as a disconnect event. This causes a brief
+display blackout followed by a re-plug, which is disruptive under
+both X11 and Wayland.
+
+Add a single retry with a 100ms delay before giving up on the link.
+DisplayPort link training typically completes within a few
+milliseconds; 100ms is generous enough to cover worst-case
+re-negotiation on older hardware without adding perceptible latency
+for genuine unplug events.
+
+The retry is bounded (exactly one attempt) and only applies to the
+IRQ path — plug/unplug events are not affected.
+
+Tested on NVAC (MCP79) with DisplayPort output over extended DPMS
+on/off cycles. Without this patch, occasional display flickers were
+observed after DPMS resume. With this patch, all DPMS transitions are
+clean.
+
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+---
+ drivers/gpu/drm/nouveau/nouveau_display.c | 4 ++++
+ 1 file changed, 4 insertions(+)
+
+diff --git a/drivers/gpu/drm/nouveau/nouveau_display.c b/drivers/gpu/drm/nouveau/nouveau_display.c
+index d71dcfc6e..b6e40794b 100644
+--- a/drivers/gpu/drm/nouveau/nouveau_display.c
++++ b/drivers/gpu/drm/nouveau/nouveau_display.c
+@@ -465,6 +465,10 @@ nouveau_display_hpd_work(struct work_struct *work)
+ 		if (bits & NVIF_CONN_EVENT_V0_IRQ) {
+ 			if (nouveau_dp_link_check(nv_connector))
+ 				continue;
++			/* Retry once after 100ms for transient DP glitches (NV50/G94) */
++			msleep(100);
++			if (nouveau_dp_link_check(nv_connector))
++				continue;
+ 		}
+ 
+ 		connector->status = drm_helper_probe_detect(connector, NULL, false);
+-- 
+2.52.0
+
