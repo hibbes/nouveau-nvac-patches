@@ -1,0 +1,111 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
+Date: Mon, 4 May 2026 19:20:00 +0200
+Subject: [PATCH] [DO-NOT-MERGE] drm/nouveau/fifo: add debugfs fault injector
+ for testing
+
+Local-only debugging tool that exposes write-only debugfs files:
+  /sys/kernel/debug/dri/N/nouveau_fifo_inject_cache_error
+  /sys/kernel/debug/dri/N/nouveau_fifo_inject_dma_pusher
+
+Writing a chid value triggers nv04_fifo_recover() with the
+corresponding fault type. Used to exercise Tier-1 channel-kill and
+Tier-2 device-wedge paths without needing real hardware faults
+(which are rare on patched MSI Re-Arm builds).
+
+NOT FOR UPSTREAM. Lives only in the dev-fault-injector branch of
+the nouveau-nvac-patches repository.
+
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+---
+diff --git a/drivers/gpu/drm/nouveau/nouveau_debugfs.c b/drivers/gpu/drm/nouveau/nouveau_debugfs.c
+--- a/drivers/gpu/drm/nouveau/nouveau_debugfs.c	2026-04-30 17:58:18.437287629 +0200
++++ b/drivers/gpu/drm/nouveau/nouveau_debugfs.c	2026-05-04 19:20:54.919179288 +0200
+@@ -33,6 +33,9 @@
+ #include <nvif/if0001.h>
+ #include "nouveau_debugfs.h"
+ #include "nouveau_drv.h"
++#include <core/device.h>
++#include <engine/fifo.h>
++#include "nvkm/engine/fifo/priv.h"
+ 
+ static int
+ nouveau_debugfs_vbios_image(struct seq_file *m, void *data)
+@@ -290,6 +293,16 @@
+ 
+ 	d_inode(dentry)->i_size = drm->vbios.length;
+ 	dput(dentry);
++
++#ifdef CONFIG_DEBUG_FS
++	{
++		struct nvkm_device *nvkm = nvxx_device(drm);
++		struct nvkm_fifo *fifo = nvkm ? nvkm->fifo : NULL;
++
++		if (fifo)
++			nv04_fifo_debugfs_init(fifo, minor->debugfs_root);
++	}
++#endif
+ }
+ 
+ int
+diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/priv.h b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/priv.h
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/priv.h	2026-05-04 16:55:14.148735064 +0200
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/priv.h	2026-05-04 19:20:41.769199482 +0200
+@@ -93,6 +93,11 @@
+ extern unsigned int nouveau_fifo_wedge_count;
+ extern unsigned int nouveau_fifo_wedge_window_ms;
+ 
++#ifdef CONFIG_DEBUG_FS
++struct dentry;
++void nv04_fifo_debugfs_init(struct nvkm_fifo *fifo, struct dentry *parent);
++#endif
++
+ int nv10_fifo_chid_nr(struct nvkm_fifo *);
+ 
+ int nv50_fifo_chid_nr(struct nvkm_fifo *);
+diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/recover.c b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/recover.c
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/recover.c	2026-05-04 16:55:14.149096933 +0200
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/recover.c	2026-05-04 19:20:14.819016264 +0200
+@@ -119,3 +119,42 @@
+ {
+ 	cancel_work_sync(&fifo->wedge.work);
+ }
++
++#ifdef CONFIG_DEBUG_FS
++#include <linux/debugfs.h>
++
++static int
++nv04_fifo_inject_cache_error_set(void *data, u64 val)
++{
++	struct nvkm_fifo *fifo = data;
++
++	nv04_fifo_recover(fifo, (u32)val, NV04_FAULT_CACHE_ERROR, 0xdeadbeef);
++	return 0;
++}
++
++static int
++nv04_fifo_inject_dma_pusher_set(void *data, u64 val)
++{
++	struct nvkm_fifo *fifo = data;
++
++	nv04_fifo_recover(fifo, (u32)val, NV04_FAULT_DMA_PUSHER, 0xdeadbeef);
++	return 0;
++}
++
++DEFINE_DEBUGFS_ATTRIBUTE(nv04_fifo_inject_cache_error_fops, NULL,
++			 nv04_fifo_inject_cache_error_set, "%llu\n");
++DEFINE_DEBUGFS_ATTRIBUTE(nv04_fifo_inject_dma_pusher_fops, NULL,
++			 nv04_fifo_inject_dma_pusher_set, "%llu\n");
++
++void
++nv04_fifo_debugfs_init(struct nvkm_fifo *fifo, struct dentry *parent)
++{
++	if (!fifo || !parent)
++		return;
++
++	debugfs_create_file("nouveau_fifo_inject_cache_error", 0200, parent,
++			    fifo, &nv04_fifo_inject_cache_error_fops);
++	debugfs_create_file("nouveau_fifo_inject_dma_pusher", 0200, parent,
++			    fifo, &nv04_fifo_inject_dma_pusher_fops);
++}
++#endif
