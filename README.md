@@ -58,7 +58,7 @@ hardware, and a successful soak period before submission.
 | 0003 | drm/nouveau/dp: retry link check once on HPD IRQ before disconnect | sent ML 2026-04-09, soak reported |
 | 0004 | drm/nouveau/fifo/nv04: filter benign CACHE_ERROR from Mesa NV50 bind probe | local only; cosmetic, ML send deferred |
 | 0005 | drm/nouveau/clk: stop reclocking after consecutive failures | local only; userland-side mitigated by nouveau-pstate-daemon v0.2.0, ML send deferred |
-| 0006 | drm/nouveau: notify userspace of wedged GPU via drm_dev_wedged_event | local only; adopts drm-uapi wedge mechanism, planned ML send |
+| 0006 | drm/nouveau/fifo: add recovery path for Tesla cache_error/dma_pusher | local only; Tier-1 channel-kill + Tier-2 device-wedge with `drm_dev_wedged_event`; debugfs fault-injector validation Phases 1-5 done, Phase 6 soak in progress |
 
 ### 0001 — pci: use nv46 MSI rearm for G94 (NVAC/MCP79)
 
@@ -165,43 +165,86 @@ trigger; v0.2.0 of nouveau-pstate-daemon switches to event-driven
 writes via swayidle and removes that trigger surface.
 
 **ML status.** Submission deferred while the userland-side fix
-(daemon v0.2.0) reduces the in-the-wild urgency. The replacement of
-this latch by the `drm_dev_wedged_event` mechanism (patch 0006) is
-likely the cleaner upstream story, so 0005 may end up withdrawn
-in favour of 0006 alone.
+(daemon v0.2.0) reduces the in-the-wild urgency. Patch 0006 reaches
+the same wedge-state observability through `drm_dev_wedged_event` as
+the Tier-2 action of its FIFO recovery path, so 0005 may end up
+withdrawn in favour of 0006 alone.
 
 **Files touched.**
 `drivers/gpu/drm/nouveau/include/nvkm/subdev/clk.h` (+2),
 `drivers/gpu/drm/nouveau/nvkm/subdev/clk/base.c` (+12).
 
-### 0006 — adopt drm_dev_wedged_event for unrecoverable engine state
+### 0006 — fifo: add recovery path for Tesla cache_error/dma_pusher
 
-**Problem.** Nouveau has no mechanism to tell userspace that the GPU
-has entered an unrecoverable state. The only signal is dmesg, which
-requires `kernel.dmesg_restrict=0` and string-scraping. Meanwhile DRM
-has had `drm_dev_wedged_event()` since 6.15 (i915, xe, amdgpu use it).
+**Problem.** On Tesla (nv50 / g8x / g9x including MCP77/MCP79),
+`nv04_fifo_intr_cache_error` and `nv04_fifo_intr_dma_pusher` log the
+fault, reset the HW registers, and return. The offending channel
+keeps running with potentially corrupt state. There is no call to
+`nvkm_chan_error`, no DRM wedge event, no counter, no tracepoint. The
+only signal is `dmesg`. Fermi+ gets channel-kill and device-wedge
+automatically through `nvkm_runl_rc`; Tesla was feature-frozen before
+the DRM wedge uAPI existed.
 
-**Fix.** Hook `nvkm_runl_rc()` at the engine-reset failure path. When
-`nvkm_engine_reset()` fails, emit
-`drm_dev_wedged_event(dev, DRM_WEDGE_RECOVERY_REBIND, NULL)` so
-subscribers (session manager, pstate daemon, telemetry) get a uevent
-with `WEDGED=rebind`. The kernel reset retry behaviour is unchanged;
-this only adds an outbound notification.
+Three concrete consequences:
 
-The new helper `nouveau_drm_notify_wedged()` lives in `nouveau_drm.c`
-so the nvkm code does not have to handle the `dev_get_drvdata`
-traversal itself. A precedent for nvkm code calling into nouveau_drm
-helpers exists in `nvkm/subdev/clk/gk20a_devfreq.c`.
+1. Silent state corruption: the channel produces wrong pixels or
+   compute output after the fault, with no notice to userspace.
+2. Observability gap: no counters, no tracepoints, no wedge event,
+   only dmesg.
+3. Repeated-fault loop: if a channel faults persistently, the
+   log-and-reset cycle repeats forever instead of killing the channel.
 
-**ML status.** Build-verified out-of-tree against Linux 7.0.3; sender
-plans submission after a soak period in the next gentoo-kernel-bin
-rebuild cycle. Replaces or complements 0005 as the upstream-clean
-alternative for surfacing wedge state.
+**Fix.** A two-tier recovery pipeline kept in a new helper file
+`nvkm/engine/fifo/recover.c`. Existing intr handlers gain one extra
+function call each.
+
+*Tier 1 (per fault).* Look up the channel via `nvkm_chan_get_chid`,
+call `nvkm_chan_error(chan, true)`, fire tracepoint
+`nouveau:fifo_chan_killed`. Idempotent through the existing
+`chan->errored` short-circuit, so repeated faults on the same channel
+are no-ops; other channels are unaffected.
+
+*Tier 2 (sliding window).* Per-`nvkm_fifo` ring buffer of fault
+timestamps. When the window count reaches the threshold, schedule a
+worker that calls
+`drm_dev_wedged_event(drm, DRM_WEDGE_RECOVERY_REBIND, NULL)` and
+fires tracepoint `nouveau:fifo_dev_wedged`. Worker context is needed
+because `kobject_uevent_env` allocates `GFP_KERNEL` and may sleep,
+which is illegal from the IRQ path. `atomic_xchg` makes the wedge
+emit idempotent across concurrent faults; the flag clears implicitly
+on driver rebind.
+
+`DRM_WEDGE_RECOVERY_REBIND` is the right hint for this hardware:
+`BUS_RESET` would tear the Mac mini PCI tree apart, and `NONE` would
+not signal that userspace should act. `REBIND` tells session managers
+to unbind+bind the driver and restart the compositor.
+
+**Module parameters.** `nouveau.fifo_wedge_count` (uint, range 0..32,
+default 10) sets the Tier-2 threshold; `0` disables Tier-2 entirely
+while leaving Tier-1 channel-kill active. `nouveau.fifo_wedge_window_ms`
+(uint, range 100..600000, default 60000) sets the window width.
+
+**Validation.** Phases 1-5 of the test plan in
+`docs/specs/2026-05-04-nv04-fifo-recovery-design.md` are done,
+exercised through the `dev-fault-injector` debugfs writes (separate
+branch, `[DO-NOT-MERGE]`). Phase 6 (real-world soak without manual
+injection) is in progress on the reference host. The companion
+[hibbes/nouveau-pstate-daemon](https://github.com/hibbes/nouveau-pstate-daemon)
+v0.2.0 includes a udev subscriber for the resulting `WEDGED=rebind`
+event and was end-to-end validated on 2026-05-05.
+
+**ML status.** Local-only; submission with patches 4 and 5 in the v2
+bundle, blocked on Phase 6 soak completion.
 
 **Files touched.**
-`drivers/gpu/drm/nouveau/nouveau_drm.c` (+20),
-`drivers/gpu/drm/nouveau/nouveau_drv.h` (+1),
-`drivers/gpu/drm/nouveau/nvkm/engine/fifo/runl.c` (+13 / -3).
+`drivers/gpu/drm/nouveau/nvkm/engine/fifo/recover.c` (new, ~150 LOC),
+`drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c` (+2 call sites),
+`drivers/gpu/drm/nouveau/nvkm/engine/fifo/base.c` (+~10),
+`drivers/gpu/drm/nouveau/nvkm/engine/fifo/priv.h` (+~3),
+`drivers/gpu/drm/nouveau/nvkm/engine/fifo/Kbuild` (+1),
+`drivers/gpu/drm/nouveau/include/nvkm/engine/fifo.h` (+~15),
+`include/trace/events/nouveau.h` (+~30 for two `TRACE_EVENT`),
+`drivers/gpu/drm/nouveau/nouveau_drm.c` (+~5 for module params).
 
 ## Building locally
 
@@ -258,9 +301,8 @@ asks for the full patch file or an old version).
 
 The patches are kept on a dedicated working branch in a separate local
 clone of `torvalds/linux` (sparse-checked-out for `drivers/gpu/drm/nouveau`
-only, to keep the working set manageable). The local branches are
-`nouveau-nvac-fixes` (patches 0001 through 0005) and
-`nouveau-wedged-event` (patch 0006 on top).
+only, to keep the working set manageable). The local branch is
+`nouveau-nvac-fixes` (patches 0001 through 0006).
 
 ## Companion userland
 
@@ -268,11 +310,18 @@ A separate project tracks the userland half of the story:
 [hibbes/nouveau-pstate-daemon](https://github.com/hibbes/nouveau-pstate-daemon).
 That project is an event-driven swayidle bridge plus a small privileged
 helper that toggles between the `0e` (active) and `03` (idle) pstates
-on user-activity transitions. v0.2.0 dropped the previous polling
-design (which was the dominant trigger for the WARN-loop that motivates
-patch 0005) in favour of writing pstate only on real activity events,
-which roughly aligns with what `drm_dev_wedged_event` (patch 0006)
-makes observable.
+on user-activity transitions. v0.2.0 (released 2026-05-05) dropped the
+previous polling design, which was the dominant trigger for the
+WARN-loop that motivates patch 0005, in favour of writing pstate only
+on real activity events.
+
+v0.2.0 also ships a udev subscriber for the `WEDGED=rebind` uevent
+that patch 0006 emits as its Tier-2 action. The subscriber is
+log-only: it appends to `/var/log/nouveau-pstate-wedge.log` and
+writes a sticky snapshot at `/run/nouveau-pstate.wedged` for status
+bars and session managers to consume. End-to-end validation on the
+reference host on 2026-05-05 captured a real `WEDGED=rebind` uevent
+on `/dev/dri/card0`.
 
 ## Soak methodology
 
