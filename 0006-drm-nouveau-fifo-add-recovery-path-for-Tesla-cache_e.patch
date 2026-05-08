@@ -59,10 +59,9 @@ diff -urN rev/drivers/gpu/drm/nouveau/include/nvkm/engine/fifo.h cur/drivers/gpu
  struct nvkm_fifo {
  	const struct nvkm_fifo_func *func;
  	struct nvkm_engine engine;
-@@ -87,6 +98,7 @@
+@@ -87,5 +98,6 @@
  	spinlock_t lock;
  	struct mutex mutex;
- 
 +	struct nvkm_fifo_wedge wedge;
  };
  
