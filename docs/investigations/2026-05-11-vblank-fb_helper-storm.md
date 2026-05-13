@@ -1,5 +1,12 @@
 # Investigation: vblank wait timeout + boot-time FIFO wedge storm
 
+> **Note (2026-05-13):** the primary hypothesis below (WARN_ON_ONCE at
+> `drm_vblank.c:747` in the timestamp helper) turned out to be the
+> wrong WARN source. The actually-observed boot-time storm originates
+> from `drm_WARN` at `drm_vblank.c:1320` in the `drm_crtc_wait_one_vblank()`
+> timeout path. See `2026-05-13-vblank-storm-resolution.md` for the
+> corrected analysis and the deployed fix (patch 0009).
+
 **Created:** 2026-05-11 ~05:45
 **Trigger:** Live-Debug-Session 10./11. Mai. swaybg-Buffer war im oberen
 Bildschirmbereich nach 24 h gefroren; nach swaybg-Restart sauber. User

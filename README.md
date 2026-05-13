@@ -59,6 +59,7 @@ hardware, and a successful soak period before submission.
 | 0004 | drm/nouveau/fifo/nv04: filter benign CACHE_ERROR from Mesa NV50 bind probe | local only; cosmetic, ML send deferred |
 | 0005 | drm/nouveau/clk: stop reclocking after consecutive failures | local only; userland-side mitigated by nouveau-pstate-daemon v0.2.0, ML send deferred |
 | 0006 | drm/nouveau/fifo: add recovery path for Tesla cache_error/dma_pusher | local only; Tier-1 channel-kill + Tier-2 device-wedge with `drm_dev_wedged_event`; debugfs fault-injector validation Phases 1-5 done, Phase 6 soak in progress |
+| 0009 | drm/nouveau/display: reject vblank-IRQ enable on inactive CRTC | local only; 7.0.6 boot-time vblank-timeout storm fix, deployed 2026-05-13 |
 
 ### 0001 — pci: use nv46 MSI rearm for G94 (NVAC/MCP79)
 
@@ -245,6 +246,69 @@ bundle, blocked on Phase 6 soak completion.
 `drivers/gpu/drm/nouveau/include/nvkm/engine/fifo.h` (+~15),
 `include/trace/events/nouveau.h` (+~30 for two `TRACE_EVENT`),
 `drivers/gpu/drm/nouveau/nouveau_drm.c` (+~5 for module params).
+
+### 0009 — display: reject vblank-IRQ enable on inactive CRTC
+
+**Problem.** `nouveau_display_vblank_enable()` unconditionally arms the
+nvif vblank event mask via `nvif_event_allow()` and returns 0. On NVAC
+the display engine emits no vblank events until the first
+`atomic_commit` gates the CRTC on, so a successful
+`enable_vblank()`/`drm_crtc_vblank_get()` followed by
+`drm_crtc_wait_one_vblank()` stalls for the full 1 s timeout and emits
+`drm_WARN` at `drivers/gpu/drm/drm_vblank.c:1320`.
+
+fbcon's `FBIO_WAITFORVSYNC` ioctl routes through this path during early
+boot. On the reference Mac mini the first userland modeset arrives
+roughly 85 s after `drm_fb_helper` registers the framebuffer device, so
+Plymouth and fbcon-internal updates issue ~40 such ioctls in that
+window. Each call prints a full WARN-with-trace, dominates the visible
+boot output, and stretches boot by ~40 s of synchronous 1-second
+waits. The pattern was already faintly present under kernel 7.0.5
+(~4 timeouts per boot); the bump to 7.0.6 multiplied the count to
+44 - 55 per boot, presumably from a change in the Plymouth / fbcon
+boot-time call frequency.
+
+**Fix.** Refuse to arm the event mask while the CRTC state is not yet
+committed-active:
+
+```c
+if (crtc->state && !crtc->state->active)
+    return -EINVAL;
+```
+
+`drm_crtc_vblank_get()` then returns non-zero and
+`drm_client_modeset_wait_for_vblank()` skips the wait silently
+(`drivers/gpu/drm/drm_client_modeset.c:1329` path). The first real
+atomic commit sets `state->active = true` and subsequent enables go
+through unchanged.
+
+**Why nouveau-side and not drm-core.** A more general fix would live
+in `drm_client_modeset_wait_for_vblank()` itself with the same
+`crtc->state->active` check, benefiting every atomic-modeset driver
+with similar boot timing. That patch was prepared as 0008 and
+deployed against the source tree, but had no runtime effect: the
+reference build uses `CONFIG_DRM_CLIENT=y`, so
+`drm_client_modeset_wait_for_vblank()` is linked into the kernel
+image proper, not into `drm_kms_helper.ko`. The local-rebuild hook
+only rebuilds modules and leaves the pre-built `vmlinuz` from
+`gentoo-kernel-bin` in place. 0009 lives in nouveau because nouveau
+is the module that the hook actually rebuilds. The drm-core
+equivalent is the right upstream submission shape and is kept in
+`docs/investigations/2026-05-13-vblank-storm-resolution.md`.
+
+**Reproducer.** Boot the reference machine, watch
+`/var/log/kernel/current` between t=5 s and t=90 s for repeated
+`vblank wait timed out on crtc 0` lines each accompanied by a
+`WARNING: drivers/gpu/drm/drm_vblank.c:1320` trace.
+
+**ML status.** Local only. Submission requires deciding upstream
+shape: nouveau-only as in this patch, or drm-core as in the parked
+0008 draft. The drm-core version touches a shared path and likely
+needs ack from `drm-misc` maintainers; the nouveau-only version is
+narrow but does not help other atomic-modeset drivers.
+
+**Files touched.** `drivers/gpu/drm/nouveau/nouveau_display.c`
+(+17 LOC inside `nouveau_display_vblank_enable`).
 
 ## Building locally
 
