@@ -16,7 +16,7 @@ Add a shared recovery helper nv04_fifo_recover() that both intr
 handlers call after the existing logging+reset sequence. It implements
 two tiers:
 
-  Tier-1 (per-fault): nvkm_chan_get_chid + nvkm_chan_error(chan, true).
+  Tier-1 (per-fault): nvkm_chan_get_chid + nvkm_chan_error(chan, false).
   The atomic chan->errored short-circuit means re-faults on the same
   channel are no-op; other channels are unaffected.
 
@@ -313,7 +313,7 @@ diff -urN rev/drivers/gpu/drm/nouveau/nvkm/engine/fifo/recover.c cur/drivers/gpu
 +
 +	chan = nvkm_chan_get_chid(&fifo->engine, chid, &flags);
 +	if (chan) {
-+		nvkm_chan_error(chan, true);
++		nvkm_chan_error(chan, false);
 +		nvkm_chan_put(&chan, flags);
 +	}
 +
