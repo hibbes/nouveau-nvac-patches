@@ -79,15 +79,30 @@ at the correct PUT.
 - Core channel (`nv50_disp_core_func`, `nv50.c:995`): fini→init is sufficient
   because `core_init` contains the unstick heuristic (`nv50.c:968-972`).
 - Base/ovly dmac (`nv50_disp_dmac_func`, `nv50.c:705`; ctrl=1 base, ctrl=3 ovly):
-  `dmac_init` (`nv50.c:654`) has NO unstick. If base recovery does not take in
-  practice, mirror the core unstick before dmac init, addressing
-  `0x610200 + ctrl*0x10`.
+  an INDEPENDENT channel with its own control slot (`0x610200 + ctrl*0x10`), GET/PUT
+  mirror (`0x640000 + ctrl*0x1000`) and `suspend_put`. Core recovery does NOT heal it
+  at the HW slot. Its `dmac_init` (`nv50.c:654`) has NO unstick; recover it via its
+  own fini→init (deactivate `0x00001010->0x1000`, `0x3->0`, wait `!0x001e0000`, save
+  suspend_put, re-arm, wait `!0x80000000`). The bit layout is channel-generic
+  (core/dmac/pioc all test the same fields at their own `+ctrl*0x10`), so the core
+  unstick masks (`0x00800000`/`0x00600000`) MAY be mirrored onto the base slot, but
+  only as an optional extra attempt if the normal fini/init does not clear the state
+  field, gated and logged. Those masks are empirical and undocumented (envytools
+  documents only bit4 `DMA_ENABLED`; gf119/gp102/gv100 dropped the unstick entirely)
+  and were never validated for dmac upstream (Lyude's 2018 GM107 dmac-init fix added
+  none). NEVER set the `0x01000000` bit for a dmac (core-only, `nv50.c:980` vs dmac
+  `0x00000013` `nv50.c:668`).
 - `init` returns `-EBUSY` on its 2000 ms timeout (`nv50.c:677`/`989`). The recover
   primitive must check this and escalate (retry once, else leave the old behaviour)
   rather than silently continue. `fini` returns void and only WARNs.
-- Multi-channel order: recover core first (it carries the method/HEAD state,
-  `nv50_disp_core_mthd`), then base/ovly, because base binds via core state
-  (`nv50_disp_dmac_bind`, `nv50.c:626`). For a pure base stall do not touch core.
+- Multi-channel order and interlock: recover core FIRST. base/window UPDATEs
+  interlock with core (`base507c` INTERLOCK_WITH_CORE / `core507d` INTERLOCK_WITH_BASE,
+  `cl507c.h:60-67` / `cl507d.h:48-53`), so a core hang blocks the base UPDATE and the
+  base notifier stays NOT_BEGUN: that is why the wedge shows `core notifier timeout`
+  first, then `base-1: timeout`. Core recovery clears that interlock case. THEN
+  re-check the base channel and recover it separately only if its own GET/state is
+  still stuck. Do not assume core recovery always heals base; do not touch core for a
+  pure base stall.
 
 ### 4.2 nvif bridge (nvkm/engine/disp/chan.c + include/nvif/if0014.h)
 
@@ -223,8 +238,16 @@ rebuild against `/usr/src/linux-7.0.11-gentoo` (the gentoo-sources tree with .c;
    *survives* a stuck channel, NOT that init+unstick then heals it (no productive
    init followed during rmmod). Whether fini→init+unstick actually revives a real
    wedged channel is the central hypothesis to validate (stages B/C).
-2. **Base/ovly has no unstick.** `dmac_init` lacks the core's heuristic; base
-   recovery may need a mirrored unstick on `0x610200 + ctrl*0x10`.
+2. **Base recovery is separate (resolved).** Base/ovly is an independent channel
+   (own control slot, GET/PUT mirror, suspend_put); core recovery does not heal its
+   HW slot, but core and base UPDATEs interlock, so core recovery covers the common
+   interlock-induced base stall. Recover base via its own fini→init; the core unstick
+   masks (`0x00800000`/`0x00600000`) may be mirrored onto its slot only as a gated,
+   logged fallback. Residual risk: those masks are empirical, undocumented (envytools
+   documents only bit4), and were never validated for a dmac upstream, so on a base
+   slot they may be a no-op or wrong. Mitigated by the normal fini/init being the
+   primary path and the mask attempt being optional and off by default. Never set
+   `0x01000000` on a dmac (core-only).
 3. **Unstick mask match.** The heuristic targets
    `(0x610200 & 0x009f0000)==0x00020000` / `(&0x003f0000)==0x00030000`. The observed
    stuck core value during the live freeze read 0x2d0b001b (a non-wedged active
