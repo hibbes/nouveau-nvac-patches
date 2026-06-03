@@ -273,3 +273,60 @@ rebuild against `/usr/src/linux-7.0.11-gentoo` (the gentoo-sources tree with .c;
 Param + recover primitive + bridge + worker land on `v2-prep` (where 0006/0009
 live). The injector is DO-NOT-MERGE on `dev-fault-injector`. Default-off keeps
 `master`/`v2-prep` safe.
+
+## 9. v2 (2026-06-03) — validation finding and redesign
+
+The v1 design above was implemented, built, loaded via a test boot (a dracut
+test initramfs containing the patched module + a one-time GRUB entry with
+`nouveau.disp_recover=1`), and exercised with the debugfs injector on the healthy
+core channel. The recovery mechanics ran cleanly (core fini/init, no timeout
+logs) and produced the first real register capture:
+
+    nouveau disp: chan 0 recover: ctrl 0x610200=2d0b001b put 0x640000=0000016c
+
+`0x2d0b001b` is the normal active state (NOT the unstick patterns
+`0x00020000`/`0x00030000`), and `put=0x16c` is valid pending display
+programming. But the screen went black and stayed black, then a `base-1: timeout`
+storm started (~94 s) with EVO error dumps for "Base 2".
+
+**Root-cause gap:** forcing the channel to PUT==0 + resetting the client pointers
+DISCARDS the channel's display programming and does NOT replay it. The v1
+assumption "the next commit reprograms" is wrong: atomic commits are PARTIAL
+(only changed properties), so they do not restore the discarded state, and the
+driver's armed-state cache is now stale versus the reset HW. This holds for a
+real wedge too. The injector also recovered only the core channel; the
+base/window channel stayed wedged.
+
+### 9.1 v2 approach: re-init ALL channels + forced full modeset
+
+Recovery must do a channel re-init AND a full display-state replay (the display
+half of suspend/resume). nouveau's resume (`drm_atomic_helper_resume` on the
+state saved by `drm_atomic_helper_suspend`) is NOT directly reusable, because
+`drm_atomic_helper_suspend` commits a disable through the wedged channel and
+would hang. Instead, mirror GPU-reset display recovery in other drivers.
+
+In the recovery worker, under DRM modeset locks (replacing `disp->mutex`):
+
+1. Re-init ALL active EVO channels via the nvif recover primitive (core first for
+   the interlock, then the active base/window channels) — un-wedges + resets HW.
+2. Force a full re-program: `drm_atomic_helper_duplicate_state(dev, &ctx)`, set
+   `crtc_state->mode_changed = true` on every enabled CRTC, then
+   `drm_atomic_commit` the state. `nv50_disp_atomic_commit_tail` re-arms the
+   entire display state (heads + all windows) into the fresh channels.
+
+**Locking change:** the worker takes `DRM_MODESET_LOCK_ALL` (serializes against
+normal commits, so `disp->mutex` is not held by the worker). The forced-modeset
+`commit_tail` takes `disp->mutex` itself, so the worker must NOT hold it
+(deadlock). The blocking commit runs in the worker's process context (allowed).
+
+### 9.2 Open v2 implementation questions
+
+- exact incantation for "force a full re-program of the current config"
+  (duplicate_state + mode_changed + `drm_atomic_commit` vs a dedicated helper);
+- which channels to re-init and ordering relative to the forced commit;
+- the nvkm supervisor race (§6.5) is unchanged.
+
+**Success indicator:** the injector RESTORES the display (no black, no base-1
+storm) instead of blacking it. The implementation plan needs a v2 revision for
+the worker (forced modeset + locking) before the next build. The v1 worker
+(reset-pointers only) is superseded by §9.1.
