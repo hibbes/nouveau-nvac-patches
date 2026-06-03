@@ -14,20 +14,33 @@ only a reboot recovers it.
 
 Add an opt-in reactive recovery. On nv50_dmac_wait() timeout, when the
 new module parameter disp_recover is set, schedule a workqueue worker
-that, under disp->mutex, drives the stuck channel through a controlled
-fini/init cycle via a new nvif disp-chan recover method
-(NVIF_DISP_CHAN_V0_RECOVER). The core channel is recovered first to
-clear the core/base interlock, then the channel that timed out; the
-wedged pushbuffer is discarded (suspend_put forced to 0) and the
-client-side pushbuffer pointers reset to an empty ring so the next
-commit starts clean. The recover primitive logs the channel control
-register (0x610200) and GET mirror (0x640000) before the cycle to
-capture the real wedge state. The worker is cancelled at display
-teardown and bails if the core channel is gone.
+that recovers the display in two phases:
 
-disp_recover defaults to 0, so the timeout path is unchanged (one
-branch test) until the parameter is explicitly enabled. NVAC/MCP79
-only; reactive recovery is still unproven and gated for that reason.
+  1. Re-arm every active EVO DMA channel. Under disp->mutex, the core
+     channel is recovered first (clearing the core/base interlock that
+     stalls the window channels), then every window/wimm DMA channel,
+     each driven through a controlled fini/init cycle via a new nvif
+     disp-chan recover method (NVIF_DISP_CHAN_V0_RECOVER). The wedged
+     pushbuffer is discarded (suspend_put forced to 0) and the client-
+     side pushbuffer pointers reset to an empty ring. The recover
+     primitive logs the channel control register (0x610200) and GET
+     mirror (0x640000) before the cycle to capture the real wedge state.
+
+  2. Replay the committed display state. Re-arming the channels restores
+     the hardware but not its programming, so the worker then forces a
+     full-modeset replay of the current software state -- the same idiom
+     i915 uses for display recovery after a GPU reset. Under all DRM
+     modeset locks (not disp->mutex, which commit_tail re-takes itself),
+     it duplicates the live atomic state, forces mode_changed on every
+     active CRTC so the helpers cannot fast-path it away as compatible,
+     and commits it synchronously; nouveau's commit_tail then re-programs
+     core, heads and windows over the freshly re-armed channels.
+
+The worker is cancelled at display teardown and bails if the core
+channel is gone. disp_recover defaults to 0, so the timeout path is
+unchanged (one branch test) until the parameter is explicitly enabled.
+NVAC/MCP79 only; reactive recovery is still unproven and gated for that
+reason.
 
 Signed-off-by: Marek Czernohous <marek@czernohous.de>
 Assisted-by: Claude Opus 4.8
@@ -162,17 +175,18 @@ diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.h b/drivers/gpu/drm/nouveau/d
  struct nv50_msto;
  struct nouveau_encoder;
  
-@@ -28,6 +30,9 @@
+@@ -28,6 +30,10 @@
  	struct nouveau_bo *sync;
  
  	struct mutex mutex;
 +
++	struct drm_device *dev;	/* backpointer, used by the recovery worker */
 +	struct work_struct recover_work;
 +	struct nv50_dmac *recover_dmac;
  };
  
  static inline struct nv50_disp *
-@@ -62,6 +67,8 @@
+@@ -62,6 +68,8 @@
  struct nv50_dmac {
  	struct nv50_chan base;
  
@@ -181,7 +195,7 @@ diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.h b/drivers/gpu/drm/nouveau/d
  	struct nvif_push push;
  
  	struct nvif_object sync;
-@@ -93,6 +100,10 @@
+@@ -93,6 +101,10 @@
  		     s64 syncbuf, struct nv50_dmac *dmac);
  void nv50_dmac_destroy(struct nv50_dmac *);
  
@@ -222,7 +236,7 @@ diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/d
  	nv50_audio_component_fini(nouveau_drm(dev));
  
  	nvif_object_unmap(&disp->caps);
-@@ -2844,6 +2850,7 @@
+@@ -2844,12 +2850,14 @@
  		return -ENOMEM;
  
  	mutex_init(&disp->mutex);
@@ -230,6 +244,13 @@ diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/d
  
  	nouveau_display(dev)->priv = disp;
  	nouveau_display(dev)->dtor = nv50_display_destroy;
+ 	nouveau_display(dev)->init = nv50_display_init;
+ 	nouveau_display(dev)->fini = nv50_display_fini;
+ 	disp->disp = &nouveau_display(dev)->disp;
++	disp->dev = dev;	/* recovery worker reaches DRM via disp->dev */
+ 	dev->mode_config.funcs = &nv50_disp_func;
+ 	dev->mode_config.helper_private = &nv50_disp_helper_func;
+ 	dev->mode_config.quirk_addfb_prefer_xbgr_30bpp = true;
 diff --git a/drivers/gpu/drm/nouveau/dispnv50/Kbuild b/drivers/gpu/drm/nouveau/dispnv50/Kbuild
 --- a/drivers/gpu/drm/nouveau/dispnv50/Kbuild
 +++ b/drivers/gpu/drm/nouveau/dispnv50/Kbuild
@@ -245,17 +266,30 @@ diff --git a/drivers/gpu/drm/nouveau/dispnv50/recover.c b/drivers/gpu/drm/nouvea
 new file mode 100644
 --- /dev/null
 +++ b/drivers/gpu/drm/nouveau/dispnv50/recover.c
-@@ -0,0 +1,67 @@
+@@ -0,0 +1,227 @@
 +// SPDX-License-Identifier: MIT
 +#include "disp.h"
 +#include "core.h"
++#include "wndw.h"
 +
 +#include <nvif/if0014.h>
 +#include <nvif/object.h>
 +#include <nvif/push.h>
 +
++#include <drm/drm_atomic.h>
++#include <drm/drm_atomic_helper.h>
++#include <drm/drm_modeset_lock.h>
++#include <drm/drm_plane.h>
++
 +/* Re-arm a wedged EVO channel via the nvkm recover method, then resync the
 + * client-side pushbuffer state to the freshly re-armed HW (PUT == 0).
++ *
++ * v2 note: re-arming the channel alone does NOT bring the screen back -- the
++ * wedge corrupts HW registers/pushbuffer, not the DRM software state.  The
++ * worker follows this with a forced full-modeset replay (below) that
++ * re-programmes core+head+windows over the re-armed channels.  The cur/put/end
++ * resync stays here: the replay's commit_tail walks the *client-side* ring
++ * (nvif_push) and would otherwise push from a stale cur against a HW PUT of 0.
 + */
 +int
 +nv50_dmac_recover(struct nv50_dmac *dmac)
@@ -278,29 +312,145 @@ new file mode 100644
 +	return 0;
 +}
 +
++/* Re-arm every active EVO DMA channel.  Core first: this clears the
++ * core<->base/wndw interlock that otherwise keeps the window channels stalled.
++ *
++ * There is no central window list in nv50_disp; the registry is the DRM plane
++ * list (each nv50_wndw embeds a drm_plane -- nv50_wndw() macro).  A dmac is
++ * recoverable iff it was built by nv50_dmac_create(), the only path that sets
++ * dmac->disp.  nv50_wndw is kzalloc'd, so wndw/wimm.disp == NULL for channels
++ * that were never created that way (e.g. the NVAC PIO cursor, curs507a, which
++ * uses nvif_object_ctor() directly); the guard skips those across all GPU
++ * generations, while the Volta+ wimmc37b DMA channel is picked up.
++ *
++ * Caller must hold disp->mutex (short critical section, dropped before the
++ * replay so commit_tail can re-take disp->mutex without self-deadlock).
++ */
++static void
++nv50_disp_recover_dmacs(struct drm_device *dev, struct nv50_disp *disp)
++{
++	struct drm_plane *plane;
++
++	if (disp->core)
++		(void)nv50_dmac_recover(&disp->core->chan);	/* core first */
++
++	drm_for_each_plane(plane, dev) {
++		struct nv50_wndw *wndw = nv50_wndw(plane);
++
++		if (wndw->wndw.disp)
++			(void)nv50_dmac_recover(&wndw->wndw);
++		if (wndw->wimm.disp)
++			(void)nv50_dmac_recover(&wndw->wimm);
++	}
++}
++
++/* Forced full-modeset replay of the currently-committed software state.
++ *
++ * This is the i915 GPU-reset display-recovery idiom (intel_display_reset_finish
++ * -> __intel_display_driver_resume): duplicate the live software state, force a
++ * real modeset on every active CRTC so the atomic helpers cannot fast-path it
++ * away as "compatible", then commit the duplicate synchronously.  nouveau's
++ * commit_tail re-programmes core/head/windows for any CRTC whose
++ * drm_atomic_crtc_needs_modeset() is true (head.c, disp.c outp clr/set), which
++ * is exactly what the forced mode_changed produces; nv50_wndw_atomic_check sees
++ * modeset==true and forces a full window re-acquire (set.image), so the base /
++ * scanout channels are re-programmed too.
++ *
++ * Open-coded acquire/backoff loop (not DRM_MODESET_LOCK_ALL_BEGIN/END) because
++ * the duplicate happens *inside* the locked region: on -EDEADLK the state must
++ * be put and re-duplicated, which the macro's retry-before-the-body cannot do.
++ * Ownership: drm_atomic_helper_commit_duplicated_state() does NOT consume the
++ * ref (it only fixes old_state and calls drm_atomic_commit); we put it
++ * unconditionally, exactly as drm_atomic_helper_resume() does.
++ *
++ * Must run WITHOUT disp->mutex held: commit_tail re-takes disp->mutex under
++ * atom->lock_core (which the forced mode_changed guarantees), and disp->mutex
++ * is a plain, non-recursive mutex.
++ */
++static int
++nv50_disp_recover_replay(struct drm_device *dev)
++{
++	struct drm_modeset_acquire_ctx ctx;
++	struct drm_atomic_state *state = NULL;
++	struct drm_crtc_state *crtc_state;
++	struct drm_crtc *crtc;
++	int ret, i;
++
++	/* mode_config.mutex (outer) guards against a parallel probe/detect, in
++	 * the established mode_config.mutex -> modeset-locks order. */
++	mutex_lock(&dev->mode_config.mutex);
++	drm_modeset_acquire_init(&ctx, 0);
++
++retry:
++	ret = drm_modeset_lock_all_ctx(dev, &ctx);
++	if (ret)
++		goto out;
++
++	/* Snapshot the compositor-intended config; needs all modeset locks. */
++	state = drm_atomic_helper_duplicate_state(dev, &ctx);
++	if (IS_ERR(state)) {
++		ret = PTR_ERR(state);
++		state = NULL;
++		goto out;
++	}
++
++	/* Force a real modeset on every active head; leave dark heads alone to
++	 * avoid spurious enable/connector-mismatch warnings. */
++	for_each_new_crtc_in_state(state, crtc, crtc_state, i) {
++		if (crtc_state->active)
++			crtc_state->mode_changed = true;
++	}
++
++	/* Fixes the duplicate's old_state pointers and calls drm_atomic_commit.
++	 * Blocking (state->async == false) -> nv50_disp_atomic_commit_tail()
++	 * runs synchronously in this worker, which is legal in process context. */
++	ret = drm_atomic_helper_commit_duplicated_state(state, &ctx);
++
++out:
++	if (ret == -EDEADLK) {
++		if (state) {
++			drm_atomic_state_put(state);
++			state = NULL;
++		}
++		ret = drm_modeset_backoff(&ctx);
++		if (!ret)
++			goto retry;
++	}
++
++	if (state)
++		drm_atomic_state_put(state);	/* helper does not consume the ref */
++
++	drm_modeset_drop_locks(&ctx);
++	drm_modeset_acquire_fini(&ctx);
++	mutex_unlock(&dev->mode_config.mutex);
++	return ret;
++}
++
 +void
 +nv50_disp_recover_work(struct work_struct *work)
 +{
 +	struct nv50_disp *disp = container_of(work, typeof(*disp), recover_work);
-+	struct nv50_dmac *dmac = READ_ONCE(disp->recover_dmac);
++	struct drm_device *dev = disp->dev;
++	int ret;
 +
++	/* --- Phase 1: re-arm every active EVO channel, under disp->mutex, then
++	 * DROP it.  Holding it across the replay would self-deadlock. --- */
 +	mutex_lock(&disp->mutex);
-+
 +	if (!disp->core) {
 +		WRITE_ONCE(disp->recover_dmac, NULL);
 +		mutex_unlock(&disp->mutex);
 +		return;
 +	}
-+
-+	/* Core first: clears the core<->base interlock that stalls base. */
-+	(void)nv50_dmac_recover(&disp->core->chan);
-+
-+	/* Then the specific channel that timed out, if it was not the core. */
-+	if (dmac && dmac != &disp->core->chan)
-+		(void)nv50_dmac_recover(dmac);
-+
++	nv50_disp_recover_dmacs(dev, disp);
 +	WRITE_ONCE(disp->recover_dmac, NULL);
 +	mutex_unlock(&disp->mutex);
++
++	/* --- Phase 2: forced full-modeset replay re-lights the display over the
++	 * re-armed channels (the step v1 was missing). --- */
++	ret = nv50_disp_recover_replay(dev);
++	if (ret)
++		NV_ERROR(nouveau_drm(dev),
++			 "disp: EVO recovery replay failed: %d\n", ret);
 +}
 +
 +void
@@ -313,3 +463,34 @@ new file mode 100644
 +	WRITE_ONCE(disp->recover_dmac, dmac);
 +	schedule_work(&disp->recover_work);
 +}
++
++#if IS_ENABLED(CONFIG_DEBUG_FS)
++#include <linux/debugfs.h>
++
++/* DO-NOT-MERGE local test hook: force a deferred recover of the core EVO
++ * channel from userspace, to exercise the recovery path without a real wedge.
++ *   echo 1 > /sys/kernel/debug/dri/0/nouveau_disp_inject_recover
++ */
++static int
++nv50_disp_recover_inject_set(void *data, u64 val)
++{
++	struct nv50_disp *disp = data;
++
++	if (disp->core)
++		nv50_disp_recover_schedule(&disp->core->chan);
++	return 0;
++}
++DEFINE_DEBUGFS_ATTRIBUTE(nv50_disp_recover_inject_fops, NULL,
++			 nv50_disp_recover_inject_set, "%llu\n");
++
++void
++nv50_disp_recover_debugfs_init(struct drm_device *dev, struct dentry *parent)
++{
++	struct nv50_disp *disp = nv50_disp(dev);
++
++	if (!disp || !disp->core || !parent)
++		return;
++	debugfs_create_file("nouveau_disp_inject_recover", 0200, parent, disp,
++			    &nv50_disp_recover_inject_fops);
++}
++#endif
