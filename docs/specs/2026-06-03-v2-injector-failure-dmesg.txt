@@ -1,0 +1,289 @@
+# v2 injector test failure, uptime ~510s, 2026-06-03T21:54:21+02:00
+# Symptom: partial recovery (panel lit, cursor, boot fragments), then black; self-sustaining recover loop
+## register log (real wedge values):
+[  561.831039] nouveau 0000:02:00.0: disp: chan 0 recover: ctrl 0x610200=490a001b put 0x640000=000000ac
+[  561.831110] nouveau 0000:02:00.0: disp: chan 1 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+[  561.831130] nouveau 0000:02:00.0: disp: chan 3 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+[  561.831149] nouveau 0000:02:00.0: disp: chan 2 recover: ctrl 0x610200=c207001b put 0x640000=00000000
+[  566.696790] nouveau 0000:02:00.0: disp: chan 4 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+[  583.732384] nouveau 0000:02:00.0: disp: chan 0 recover: ctrl 0x610200=490a001b put 0x640000=000000ac
+[  583.732435] nouveau 0000:02:00.0: disp: chan 1 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+[  583.732459] nouveau 0000:02:00.0: disp: chan 3 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+[  583.732481] nouveau 0000:02:00.0: disp: chan 2 recover: ctrl 0x610200=c207001b put 0x640000=00000000
+[  588.602523] nouveau 0000:02:00.0: disp: chan 4 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+[  605.635688] nouveau 0000:02:00.0: disp: chan 0 recover: ctrl 0x610200=490a001b put 0x640000=000000ac
+[  605.635758] nouveau 0000:02:00.0: disp: chan 1 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+[  605.635777] nouveau 0000:02:00.0: disp: chan 3 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+[  605.635792] nouveau 0000:02:00.0: disp: chan 2 recover: ctrl 0x610200=c207001b put 0x640000=00000000
+[  610.507390] nouveau 0000:02:00.0: disp: chan 4 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+[  627.541932] nouveau 0000:02:00.0: disp: chan 0 recover: ctrl 0x610200=490a001b put 0x640000=000000ac
+[  627.542002] nouveau 0000:02:00.0: disp: chan 1 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+[  627.542022] nouveau 0000:02:00.0: disp: chan 3 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+[  627.542037] nouveau 0000:02:00.0: disp: chan 2 recover: ctrl 0x610200=c207001b put 0x640000=00000000
+[  632.407688] nouveau 0000:02:00.0: disp: chan 4 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+[  649.442429] nouveau 0000:02:00.0: disp: chan 0 recover: ctrl 0x610200=490a001b put 0x640000=000000ac
+[  649.442500] nouveau 0000:02:00.0: disp: chan 1 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+[  649.442518] nouveau 0000:02:00.0: disp: chan 3 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+[  649.442538] nouveau 0000:02:00.0: disp: chan 2 recover: ctrl 0x610200=c207001b put 0x640000=00000000
+[  654.309194] nouveau 0000:02:00.0: disp: chan 4 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+[  671.341139] nouveau 0000:02:00.0: disp: chan 0 recover: ctrl 0x610200=490a001b put 0x640000=000000ac
+[  671.341212] nouveau 0000:02:00.0: disp: chan 1 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+[  671.341230] nouveau 0000:02:00.0: disp: chan 3 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+[  671.341251] nouveau 0000:02:00.0: disp: chan 2 recover: ctrl 0x610200=c207001b put 0x640000=00000000
+[  676.210451] nouveau 0000:02:00.0: disp: chan 4 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+[  693.235429] nouveau 0000:02:00.0: disp: chan 0 recover: ctrl 0x610200=490a001b put 0x640000=000000ac
+[  693.235495] nouveau 0000:02:00.0: disp: chan 1 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+[  693.235516] nouveau 0000:02:00.0: disp: chan 3 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+[  693.235535] nouveau 0000:02:00.0: disp: chan 2 recover: ctrl 0x610200=c207001b put 0x640000=00000000
+[  698.102592] nouveau 0000:02:00.0: disp: chan 4 recover: ctrl 0x610200=4003001b put 0x640000=00000000
+## timeouts + stacks:
+[  552.101684] Workqueue: events nv50_disp_recover_work [nouveau]
+[  552.101962] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  552.102826]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  552.103417]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  552.103693]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  554.534098] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/0:2/96
+[  554.534634] Workqueue: events nv50_disp_recover_work [nouveau]
+[  554.534913] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  554.535795]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  554.536411]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  554.536689]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  556.967063] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/0:2/96
+[  556.967605] Workqueue: events nv50_disp_recover_work [nouveau]
+[  556.967884] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  556.968475]  nv50_disp_atomic_commit_wndw+0x5a/0x80 [nouveau]
+[  556.968757]  nv50_disp_atomic_commit_tail+0x488/0x790 [nouveau]
+[  556.969352]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  556.969632]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  559.400498] nouveau 0000:02:00.0: drm: core notifier timeout
+[  561.830464] nouveau 0000:02:00.0: drm: base-1: timeout
+[  564.261660] Workqueue: events nv50_disp_recover_work [nouveau]
+[  564.263004]  nv50_disp_recover_work+0xc9/0x1e0 [nouveau]
+[  564.266810] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#1: kworker/u8:4/77
+[  564.267577] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  564.268481]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  566.693986] Workqueue: events nv50_disp_recover_work [nouveau]
+[  566.695043]  nv50_disp_recover_work+0xc9/0x1e0 [nouveau]
+[  566.702676] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/u8:4/77
+[  566.703456] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  566.704342]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  569.135689] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/u8:4/77
+[  569.136493] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  569.137082]  nv50_disp_atomic_commit_wndw+0x5a/0x80 [nouveau]
+[  569.137387]  nv50_disp_atomic_commit_tail+0x488/0x790 [nouveau]
+[  571.568971] nouveau 0000:02:00.0: drm: base-1: timeout
+[  574.000973] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/0:2/96
+[  574.001490] Workqueue: events nv50_disp_recover_work [nouveau]
+[  574.001767] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  574.002631]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  574.003226]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  574.003502]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  576.433889] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/0:2/96
+[  576.434415] Workqueue: events nv50_disp_recover_work [nouveau]
+[  576.434696] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  576.435559]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  576.436162]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  576.436443]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  578.866838] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/0:2/96
+[  578.867421] Workqueue: events nv50_disp_recover_work [nouveau]
+[  578.867701] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  578.868296]  nv50_disp_atomic_commit_wndw+0x5a/0x80 [nouveau]
+[  578.868575]  nv50_disp_atomic_commit_tail+0x488/0x790 [nouveau]
+[  578.869171]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  578.869448]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  581.301869] nouveau 0000:02:00.0: drm: core notifier timeout
+[  583.731835] nouveau 0000:02:00.0: drm: base-1: timeout
+[  586.163003] Workqueue: events nv50_disp_recover_work [nouveau]
+[  586.164380]  nv50_disp_recover_work+0xc9/0x1e0 [nouveau]
+[  586.170374] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#1: kworker/u8:5/78
+[  586.171132] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  586.172010]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  588.596673] Workqueue: events nv50_disp_recover_work [nouveau]
+[  588.597775]  nv50_disp_recover_work+0xc9/0x1e0 [nouveau]
+[  588.605774] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#1: kworker/u8:5/78
+[  588.606624] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  588.607532]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  591.037995] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/u8:5/78
+[  591.038803] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  591.039392]  nv50_disp_atomic_commit_wndw+0x5a/0x80 [nouveau]
+[  591.039673]  nv50_disp_atomic_commit_tail+0x488/0x790 [nouveau]
+[  593.469969] nouveau 0000:02:00.0: drm: base-1: timeout
+[  595.900853] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/0:2/96
+[  595.901379] Workqueue: events nv50_disp_recover_work [nouveau]
+[  595.901656] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  595.902520]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  595.903113]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  595.903390]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  598.333783] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/0:2/96
+[  598.334404] Workqueue: events nv50_disp_recover_work [nouveau]
+[  598.334689] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  598.335551]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  598.336144]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  598.336421]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  600.768344] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/0:2/96
+[  600.768870] Workqueue: events nv50_disp_recover_work [nouveau]
+[  600.769156] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  600.769764]  nv50_disp_atomic_commit_wndw+0x5a/0x80 [nouveau]
+[  600.770047]  nv50_disp_atomic_commit_tail+0x488/0x790 [nouveau]
+[  600.770708]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  600.770992]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  603.203303] nouveau 0000:02:00.0: drm: core notifier timeout
+[  605.635120] nouveau 0000:02:00.0: drm: base-1: timeout
+[  608.066329] Workqueue: events nv50_disp_recover_work [nouveau]
+[  608.067701]  nv50_disp_recover_work+0xc9/0x1e0 [nouveau]
+[  608.077393] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#1: kworker/u8:5/78
+[  608.078259] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  608.079127]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  610.499991] Workqueue: events nv50_disp_recover_work [nouveau]
+[  610.501078]  nv50_disp_recover_work+0xc9/0x1e0 [nouveau]
+[  610.509499] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#1: kworker/u8:5/78
+[  610.510300] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  610.511194]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  612.942940] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/u8:5/78
+[  612.943748] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  612.944371]  nv50_disp_atomic_commit_wndw+0x5a/0x80 [nouveau]
+[  612.944647]  nv50_disp_atomic_commit_tail+0x488/0x790 [nouveau]
+[  615.376215] nouveau 0000:02:00.0: drm: base-1: timeout
+[  617.806865] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/0:2/96
+[  617.807498] Workqueue: events nv50_disp_recover_work [nouveau]
+[  617.807804] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  617.808673]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  617.809328]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  617.809607]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  620.241536] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/0:2/96
+[  620.242137] Workqueue: events nv50_disp_recover_work [nouveau]
+[  620.242421] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  620.243293]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  620.243961]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  620.244245]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  622.676093] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/0:2/96
+[  622.676669] Workqueue: events nv50_disp_recover_work [nouveau]
+[  622.676951] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  622.677602]  nv50_disp_atomic_commit_wndw+0x5a/0x80 [nouveau]
+[  622.677878]  nv50_disp_atomic_commit_tail+0x488/0x790 [nouveau]
+[  622.678472]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  622.678750]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  625.111406] nouveau 0000:02:00.0: drm: core notifier timeout
+[  627.541376] nouveau 0000:02:00.0: drm: base-1: timeout
+[  629.972548] Workqueue: events nv50_disp_recover_work [nouveau]
+[  629.973927]  nv50_disp_recover_work+0xc9/0x1e0 [nouveau]
+[  629.979132] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#1: kworker/u8:5/78
+[  629.979862] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  629.980745]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  632.406163] Workqueue: events nv50_disp_recover_work [nouveau]
+[  632.407244]  nv50_disp_recover_work+0xc9/0x1e0 [nouveau]
+[  632.413544] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#1: kworker/u8:5/78
+[  632.414313] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  632.415173]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  634.846785] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#1: kworker/u8:5/78
+[  634.847611] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  634.848200]  nv50_disp_atomic_commit_wndw+0x5a/0x80 [nouveau]
+[  634.848480]  nv50_disp_atomic_commit_tail+0x488/0x790 [nouveau]
+[  637.278782] nouveau 0000:02:00.0: drm: base-1: timeout
+[  639.709395] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/0:2/96
+[  639.709914] Workqueue: events nv50_disp_recover_work [nouveau]
+[  639.710192] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  639.711087]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  639.711680]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  639.711957]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  642.143773] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/0:2/96
+[  642.144324] Workqueue: events nv50_disp_recover_work [nouveau]
+[  642.144603] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  642.145463]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  642.146056]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  642.146333]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  644.578329] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/0:2/96
+[  644.578889] Workqueue: events nv50_disp_recover_work [nouveau]
+[  644.579171] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  644.579768]  nv50_disp_atomic_commit_wndw+0x5a/0x80 [nouveau]
+[  644.580048]  nv50_disp_atomic_commit_tail+0x488/0x790 [nouveau]
+[  644.580696]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  644.580984]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  647.011913] nouveau 0000:02:00.0: drm: core notifier timeout
+[  649.441872] nouveau 0000:02:00.0: drm: base-1: timeout
+[  651.873046] Workqueue: events nv50_disp_recover_work [nouveau]
+[  651.874419]  nv50_disp_recover_work+0xc9/0x1e0 [nouveau]
+[  651.876177] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#1: kworker/u8:5/78
+[  651.876890] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  651.877779]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  654.307805] Workqueue: events nv50_disp_recover_work [nouveau]
+[  654.308858]  nv50_disp_recover_work+0xc9/0x1e0 [nouveau]
+[  654.313231] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#1: kworker/u8:5/78
+[  654.313990] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  654.314852]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  656.746848] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#1: kworker/u8:5/78
+[  656.747733] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  656.748322]  nv50_disp_atomic_commit_wndw+0x5a/0x80 [nouveau]
+[  656.748599]  nv50_disp_atomic_commit_tail+0x488/0x790 [nouveau]
+[  659.178907] nouveau 0000:02:00.0: drm: base-1: timeout
+[  661.609544] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/0:2/96
+[  661.610126] Workqueue: events nv50_disp_recover_work [nouveau]
+[  661.610414] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  661.611323]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  661.611929]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  661.612209]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  664.044056] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/0:2/96
+[  664.044588] Workqueue: events nv50_disp_recover_work [nouveau]
+[  664.044866] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  664.045726]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  664.046319]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  664.046595]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  666.476961] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/0:2/96
+[  666.477511] Workqueue: events nv50_disp_recover_work [nouveau]
+[  666.477790] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  666.478380]  nv50_disp_atomic_commit_wndw+0x5a/0x80 [nouveau]
+[  666.478658]  nv50_disp_atomic_commit_tail+0x488/0x790 [nouveau]
+[  666.479251]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  666.479528]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  668.910618] nouveau 0000:02:00.0: drm: core notifier timeout
+[  671.340583] nouveau 0000:02:00.0: drm: base-1: timeout
+[  673.771768] Workqueue: events nv50_disp_recover_work [nouveau]
+[  673.773126]  nv50_disp_recover_work+0xc9/0x1e0 [nouveau]
+[  673.774203] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#1: kworker/u8:5/78
+[  673.774916] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  673.775774]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  676.203985] Workqueue: events nv50_disp_recover_work [nouveau]
+[  676.205037]  nv50_disp_recover_work+0xc9/0x1e0 [nouveau]
+[  676.206123] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#1: kworker/u8:5/78
+[  676.206847] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  676.207725]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  678.638142] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/u8:5/78
+[  678.639003] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  678.639597]  nv50_disp_atomic_commit_wndw+0x5a/0x80 [nouveau]
+[  678.639875]  nv50_disp_atomic_commit_tail+0x488/0x790 [nouveau]
+[  681.070184] nouveau 0000:02:00.0: drm: base-1: timeout
+[  683.501022] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/0:2/96
+[  683.501552] Workqueue: events nv50_disp_recover_work [nouveau]
+[  683.501835] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  683.502713]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  683.503315]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  683.503594]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  685.936858] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/0:2/96
+[  685.937409] Workqueue: events nv50_disp_recover_work [nouveau]
+[  685.937688] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  685.938556]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  685.939152]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  685.939430]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  688.369837] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#0: kworker/0:2/96
+[  688.370440] Workqueue: events nv50_disp_recover_work [nouveau]
+[  688.370773] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  688.371374]  nv50_disp_atomic_commit_wndw+0x5a/0x80 [nouveau]
+[  688.371651]  nv50_disp_atomic_commit_tail+0x488/0x790 [nouveau]
+[  688.372250]  nv50_disp_recover_replay+0xdb/0x1c0 [nouveau]
+[  688.372528]  nv50_disp_recover_work+0x173/0x1e0 [nouveau]
+[  690.804917] nouveau 0000:02:00.0: drm: core notifier timeout
+[  693.234872] nouveau 0000:02:00.0: drm: base-1: timeout
+[  695.666056] Workqueue: events nv50_disp_recover_work [nouveau]
+[  695.667427]  nv50_disp_recover_work+0xc9/0x1e0 [nouveau]
+[  695.668841] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#1: kworker/u8:4/77
+[  695.669572] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  695.670432]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  698.099642] Workqueue: events nv50_disp_recover_work [nouveau]
+[  698.100714]  nv50_disp_recover_work+0xc9/0x1e0 [nouveau]
+[  698.102022] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#1: kworker/u8:4/77
+[  698.102752] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  698.103612]  nv50_disp_atomic_commit_tail+0x46b/0x790 [nouveau]
+[  700.536479] WARNING: dispnv50/disp.c:218 at nv50_dmac_wait+0x207/0x230 [nouveau], CPU#1: kworker/u8:4/77
+[  700.537297] RIP: 0010:nv50_dmac_wait+0x207/0x230 [nouveau]
+[  700.537895]  nv50_disp_atomic_commit_wndw+0x5a/0x80 [nouveau]
+[  700.538170]  nv50_disp_atomic_commit_tail+0x488/0x790 [nouveau]
