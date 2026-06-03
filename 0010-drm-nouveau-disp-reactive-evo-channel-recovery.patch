@@ -18,10 +18,12 @@ that, under disp->mutex, drives the stuck channel through a controlled
 fini/init cycle via a new nvif disp-chan recover method
 (NVIF_DISP_CHAN_V0_RECOVER). The core channel is recovered first to
 clear the core/base interlock, then the channel that timed out; the
-client-side pushbuffer pointers are reset so the next commit starts
-clean. The recover primitive logs the channel control register
-(0x610200) and GET mirror (0x640000) before the cycle to capture the
-real wedge state.
+wedged pushbuffer is discarded (suspend_put forced to 0) and the
+client-side pushbuffer pointers reset to an empty ring so the next
+commit starts clean. The recover primitive logs the channel control
+register (0x610200) and GET mirror (0x640000) before the cycle to
+capture the real wedge state. The worker is cancelled at display
+teardown and bails if the core channel is gone.
 
 disp_recover defaults to 0, so the timeout path is unchanged (one
 branch test) until the parameter is explicitly enabled. NVAC/MCP79
@@ -67,7 +69,7 @@ diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/disp/chan.c b/drivers/gpu/drm/n
  
  static int
  nvkm_disp_chan_ntfy(struct nvkm_object *object, u32 type, struct nvkm_event **pevent)
-@@ -161,11 +162,61 @@
+@@ -161,11 +162,66 @@
  	return chan;
  }
  
@@ -91,6 +93,11 @@ diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/disp/chan.c b/drivers/gpu/drm/n
 +		chan->func->intr(chan, false);
 +	if (chan->func->intr)
 +		chan->func->intr(chan, true);
++
++	/* Discard the wedged channel's pending pushbuffer: re-arm at PUT == 0
++	 * so the client-side reset in nv50_dmac_recover() matches the HW.
++	 */
++	chan->suspend_put = 0;
 +	return chan->func->init(chan);
 +}
 +
@@ -138,7 +145,7 @@ diff --git a/drivers/gpu/drm/nouveau/nouveau_drm.c b/drivers/gpu/drm/nouveau/nou
  
 +MODULE_PARM_DESC(disp_recover, "Attempt runtime recovery of a wedged EVO display channel (default: 0 = off)");
 +unsigned int nouveau_disp_recover = 0;
-+module_param_named(disp_recover, nouveau_disp_recover, int, 0400);
++module_param_named(disp_recover, nouveau_disp_recover, uint, 0400);
 +
  static struct drm_driver driver_stub;
  static struct drm_driver driver_pci;
@@ -206,7 +213,16 @@ diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/d
  	if (syncbuf < 0)
  		return 0;
  
-@@ -2844,6 +2848,7 @@
+@@ -2818,6 +2822,8 @@
+ {
+ 	struct nv50_disp *disp = nv50_disp(dev);
+ 
++	cancel_work_sync(&disp->recover_work);
++
+ 	nv50_audio_component_fini(nouveau_drm(dev));
+ 
+ 	nvif_object_unmap(&disp->caps);
+@@ -2844,6 +2850,7 @@
  		return -ENOMEM;
  
  	mutex_init(&disp->mutex);
@@ -229,7 +245,7 @@ diff --git a/drivers/gpu/drm/nouveau/dispnv50/recover.c b/drivers/gpu/drm/nouvea
 new file mode 100644
 --- /dev/null
 +++ b/drivers/gpu/drm/nouveau/dispnv50/recover.c
-@@ -0,0 +1,61 @@
+@@ -0,0 +1,67 @@
 +// SPDX-License-Identifier: MIT
 +#include "disp.h"
 +#include "core.h"
@@ -258,7 +274,7 @@ new file mode 100644
 +	dmac->cur = 0;
 +	dmac->put = 0;
 +	push->bgn = push->cur = dmac->push.mem.object.map.ptr;
-+	push->end = push->cur + dmac->max;
++	push->end = push->cur;   /* empty ring, like nv50_dmac_create */
 +	return 0;
 +}
 +
@@ -269,6 +285,12 @@ new file mode 100644
 +	struct nv50_dmac *dmac = READ_ONCE(disp->recover_dmac);
 +
 +	mutex_lock(&disp->mutex);
++
++	if (!disp->core) {
++		WRITE_ONCE(disp->recover_dmac, NULL);
++		mutex_unlock(&disp->mutex);
++		return;
++	}
 +
 +	/* Core first: clears the core<->base interlock that stalls base. */
 +	(void)nv50_dmac_recover(&disp->core->chan);
