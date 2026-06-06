@@ -1,0 +1,31 @@
+# LIVE wedged EVO full dump 2026-06-06T14:35:20.347577 (core notifier timeout + 77x base-N)
+# Trigger: 6m36s DPMS-off -> wake 14:27:49 -> wedge 14:27:58 (~9s nach wake)
+## EVO ctrl 0x610200+c*0x10 (bit31=BUSY, [23:16]=state):
+  ctrl0 0x610200=0x8f0e001b busy=1 state=0x0e
+  ctrl1 0x610210=0x4003001b busy=0 state=0x03
+  ctrl2 0x610220=0x8e07001b busy=1 state=0x07
+  ctrl3 0x610230=0x4003001b busy=0 state=0x03
+  ctrl4 0x610240=0x4003001b busy=0 state=0x03
+  ctrl5 0x610250=0x00010005 busy=0 state=0x01
+  ctrl6 0x610260=0x00010005 busy=0 state=0x01
+  ctrl7 0x610270=0x00010005 busy=0 state=0x01
+## channel PUT(0x00)/GET(0x04) 0x640000+c*0x1000:
+  ch0 PUT=0x09e8 GET=0x0988 STUCK 96 dw pending
+  ch1 PUT=0x0000 GET=0x0000 idle
+  ch2 PUT=0x09ac GET=0x09cc ok
+  ch3 PUT=0x0000 GET=0x0000 idle
+  ch4 PUT=0x0000 GET=0x0000 idle
+## disp engine state:
+  intr_status   0x610024 = 0x00000000
+  intr_pending  0x610020 = 0x00000000
+  intr_enable   0x61002c = 0x00000378
+  mem_ptr       0x610010 = 0x000fb709
+  caps          0x610184 = 0x03300000
+## HEAD 0x616100+h*0x800 [0x00..0x20]:
+  head0: ffffffff 05000354 078004fe 0a0006a8 00aa0000 00060001 00060001 00060001 00060001
+  head1: ffffffff 05000354 078004fe 0a0006a8 00aa0000 00060001 00060001 00060001 00060001
+## head cfg mirror 0x610190+h*0x10:
+  head0: 0000000f 05000354 078004fe 0a0006a8
+  head1: 0000000f 05000354 078004fe 0a0006a8
+## dac 0x6101d0 / sor 0x6101e0:
+  dac=0000000d sor=10000b0f
