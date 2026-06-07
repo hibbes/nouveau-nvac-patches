@@ -1,0 +1,161 @@
+From: Marek Czernohous <marek@czernohous.de>
+Date: 2026-06-07
+Subject: [PATCH] drm/nouveau/disp: soft-DPMS to prevent EVO core wedge on NVAC/MCP79
+
+On NVAC / MCP79 (GeForce 9400M, Tesla nv50) the EVO core display channel
+wedges after a pure DPMS off/on cycle. The mechanism: a DPMS-off sets the
+CRTC active true->false, and the subsequent DPMS-on (active false->true,
+mode unchanged) makes nv50_head_atomic_check take the !armh->state.active
+branch (head.c:373), which sets asyh->set.mask = ~0. That forces a full
+~96-dword head re-program to be pushed into the already-live EVO core,
+and the core freezes mid-fetch (channel busy at 0x610200, state 0x0e,
+GET stuck behind PUT). From there only a reboot recovers the display.
+
+Runtime re-arm / recovery of an already-wedged channel was investigated
+and proven impossible on this hardware (the core cannot be unstuck once
+it has latched the bad fetch). The only reliably wedge-free state is the
+normal desktop case, where the CRTC active flag is never toggled and the
+head therefore takes the selective delta path (head.c:366) instead of the
+full re-program. This patch reproduces that state across a DPMS cycle.
+
+Add an opt-in soft-DPMS mode (new module parameter soft_dpms, default 0).
+When enabled, nv50_disp_atomic_check intercepts a pure DPMS-off (CRTC
+active true->false, connectors unchanged, mode unchanged) and keeps
+crtc->active true so the head and core stay armed across the blank. The
+primary plane that userspace detached on the DPMS-off is re-attached so
+the still-active CRTC remains valid. With the head left armed, the
+following DPMS-on takes the selective delta path and the wedging full
+re-program set.core batch is never emitted.
+
+This is the prevention that finally works after reactive re-arm/recovery
+approaches (0010) were shown to be impossible to land safely. It is
+gated behind the module parameter and defaults off, so the DPMS path is
+unchanged for everyone who does not opt in. NVAC/MCP79 only. Validated
+with 0 wedges over many DPMS cycles, including real monitor standby /
+DisplayPort sink power-down.
+
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+Assisted-by: Claude Opus 4.8
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.h b/drivers/gpu/drm/nouveau/dispnv50/disp.h
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.h
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.h
+@@ -8,6 +8,7 @@
+ 
+ extern unsigned int nouveau_disp_recover;
+ extern unsigned int nouveau_disp_prevent;
++extern unsigned int nouveau_soft_dpms;
+ 
+ struct nv50_msto;
+ struct nouveau_encoder;
+diff --git a/drivers/gpu/drm/nouveau/nouveau_drm.c b/drivers/gpu/drm/nouveau/nouveau_drm.c
+--- a/drivers/gpu/drm/nouveau/nouveau_drm.c
++++ b/drivers/gpu/drm/nouveau/nouveau_drm.c
+@@ -136,6 +136,10 @@
+ unsigned int nouveau_disp_prevent = 0;
+ module_param_named(disp_prevent, nouveau_disp_prevent, uint, 0644);
+ 
++MODULE_PARM_DESC(soft_dpms, "NVAC/MCP79: keep head+core armed across a pure DPMS off/on so the EVO-core-wedging full re-program is never emitted (default: 0 = off)");
++unsigned int nouveau_soft_dpms = 0;
++module_param_named(soft_dpms, nouveau_soft_dpms, uint, 0644);
++
+ static struct drm_driver driver_stub;
+ static struct drm_driver driver_pci;
+ static struct drm_driver driver_platform;
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/atom.h b/drivers/gpu/drm/nouveau/dispnv50/atom.h
+--- a/drivers/gpu/drm/nouveau/dispnv50/atom.h
++++ b/drivers/gpu/drm/nouveau/dispnv50/atom.h
+@@ -146,6 +146,12 @@
+ 		};
+ 		u16 mask;
+ 	} set, clr;
++
++	/* soft-DPMS (NVAC/MCP79 EVO-wedge prevention): set when a pure DPMS
++	 * off/on was intercepted so the head/core is kept armed across the
++	 * blank.  _off drives the DP sink to D3, _on retrains it to D0. */
++	bool soft_dpms_off:1;
++	bool soft_dpms_on:1;
+ };
+ 
+ static inline struct nv50_head_atom *
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+@@ -38,6 +38,7 @@
+ #include <drm/display/drm_scdc_helper.h>
+ #include <drm/drm_atomic.h>
+ #include <drm/drm_atomic_helper.h>
++#include <drm/drm_atomic_uapi.h>
+ #include <drm/drm_edid.h>
+ #include <drm/drm_eld.h>
+ #include <drm/drm_fb_helper.h>
+@@ -2618,7 +2619,7 @@
+ 	struct nv50_core *core = nv50_disp(dev)->core;
+ 	struct drm_connector_state *old_connector_state, *new_connector_state;
+ 	struct drm_connector *connector;
+-	struct drm_crtc_state *new_crtc_state;
++	struct drm_crtc_state *new_crtc_state, *old_crtc_state;
+ 	struct drm_crtc *crtc;
+ 	struct nv50_head *head;
+ 	struct nv50_head_atom *asyh;
+@@ -2646,6 +2647,59 @@
+ 		}
+ 	}
+ 
++	/* soft-DPMS (NVAC/MCP79 EVO-wedge prevention, opt-in via soft_dpms):
++	 * a pure DPMS-off (CRTC active true->false, mode unchanged) makes the
++	 * following DPMS-on take the !armh->state.active branch in
++	 * nv50_head_atomic_check (head.c:373) -> asyh->set.mask=~0 -> a full
++	 * ~96-dword head re-program is pushed into the live EVO core, which then
++	 * wedges mid-fetch (busy state 0x0e, GET stuck behind PUT).  Keep the
++	 * head/core ARMED across the blank by leaving crtc->active true, so the
++	 * wake takes the selective delta path (head.c:366) and the wedging batch
++	 * is never emitted -- this reproduces normal-desktop operation (no active
++	 * toggle), the only proven wedge-free state.  Done BEFORE
++	 * drm_atomic_helper_check so the head's atomic_check sees active==true.
++	 * The primary plane is re-attached so the still-active CRTC stays valid. */
++	if (nouveau_soft_dpms) {
++		struct nouveau_drm *drm = nouveau_drm(dev);
++
++		for_each_oldnew_crtc_in_state(state, crtc, old_crtc_state, new_crtc_state, i) {
++			struct drm_plane *primary = crtc->primary;
++			struct drm_plane_state *ops, *nps;
++
++			if (!(old_crtc_state->active && !new_crtc_state->active &&
++			      !new_crtc_state->connectors_changed &&
++			      drm_mode_equal(&old_crtc_state->mode,
++					     &new_crtc_state->mode)))
++				continue;
++
++			new_crtc_state->active = true;
++			nv50_head_atom(new_crtc_state)->soft_dpms_off = true;
++			NV_INFO(drm, "soft-dpms: %s kept armed across DPMS-off\n",
++				crtc->name);
++
++			/* userspace may have detached the primary plane on the
++			 * DPMS-off; re-attach it so the active CRTC is valid. */
++			ops = drm_atomic_get_old_plane_state(state, primary);
++			if (ops && ops->fb) {
++				nps = drm_atomic_get_plane_state(state, primary);
++				if (IS_ERR(nps))
++					return PTR_ERR(nps);
++				if (!nps->fb) {
++					drm_atomic_set_fb_for_plane(nps, ops->fb);
++					nps->crtc   = crtc;
++					nps->crtc_x = ops->crtc_x;
++					nps->crtc_y = ops->crtc_y;
++					nps->crtc_w = ops->crtc_w;
++					nps->crtc_h = ops->crtc_h;
++					nps->src_x  = ops->src_x;
++					nps->src_y  = ops->src_y;
++					nps->src_w  = ops->src_w;
++					nps->src_h  = ops->src_h;
++				}
++			}
++		}
++	}
++
+ 	ret = drm_atomic_helper_check(dev, state);
+ 	if (ret)
+ 		return ret;
