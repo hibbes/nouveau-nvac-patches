@@ -38,34 +38,13 @@ Signed-off-by: Marek Czernohous <marek@czernohous.de>
 Assisted-by: Claude Opus 4.8
 Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
 ---
-diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.h b/drivers/gpu/drm/nouveau/dispnv50/disp.h
---- a/drivers/gpu/drm/nouveau/dispnv50/disp.h
-+++ b/drivers/gpu/drm/nouveau/dispnv50/disp.h
-@@ -8,6 +8,7 @@
- 
- extern unsigned int nouveau_disp_recover;
- extern unsigned int nouveau_disp_prevent;
-+extern unsigned int nouveau_soft_dpms;
- 
- struct nv50_msto;
- struct nouveau_encoder;
-diff --git a/drivers/gpu/drm/nouveau/nouveau_drm.c b/drivers/gpu/drm/nouveau/nouveau_drm.c
---- a/drivers/gpu/drm/nouveau/nouveau_drm.c
-+++ b/drivers/gpu/drm/nouveau/nouveau_drm.c
-@@ -136,6 +136,10 @@
- unsigned int nouveau_disp_prevent = 0;
- module_param_named(disp_prevent, nouveau_disp_prevent, uint, 0644);
- 
-+MODULE_PARM_DESC(soft_dpms, "NVAC/MCP79: keep head+core armed across a pure DPMS off/on so the EVO-core-wedging full re-program is never emitted (default: 0 = off)");
-+unsigned int nouveau_soft_dpms = 0;
-+module_param_named(soft_dpms, nouveau_soft_dpms, uint, 0644);
-+
- static struct drm_driver driver_stub;
- static struct drm_driver driver_pci;
- static struct drm_driver driver_platform;
-diff --git a/drivers/gpu/drm/nouveau/dispnv50/atom.h b/drivers/gpu/drm/nouveau/dispnv50/atom.h
---- a/drivers/gpu/drm/nouveau/dispnv50/atom.h
-+++ b/drivers/gpu/drm/nouveau/dispnv50/atom.h
+[regenerated 2026-06-10 against the clean local patch stack on 7.0.12:
+ the original was diffed on a tree that still carried the abandoned
+ disp_prevent experiment as context; functionally identical.]
+
+diff -ruN a/drivers/gpu/drm/nouveau/dispnv50/atom.h b/drivers/gpu/drm/nouveau/dispnv50/atom.h
+--- a/drivers/gpu/drm/nouveau/dispnv50/atom.h	2026-06-10 22:21:22.633068562 +0200
++++ b/drivers/gpu/drm/nouveau/dispnv50/atom.h	2026-06-10 22:21:22.650702065 +0200
 @@ -146,6 +146,12 @@
  		};
  		u16 mask;
@@ -79,9 +58,9 @@ diff --git a/drivers/gpu/drm/nouveau/dispnv50/atom.h b/drivers/gpu/drm/nouveau/d
  };
  
  static inline struct nv50_head_atom *
-diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/dispnv50/disp.c
---- a/drivers/gpu/drm/nouveau/dispnv50/disp.c
-+++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+diff -ruN a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c	2026-06-10 22:21:22.639596643 +0200
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c	2026-06-10 22:21:22.661312662 +0200
 @@ -38,6 +38,7 @@
  #include <drm/display/drm_scdc_helper.h>
  #include <drm/drm_atomic.h>
@@ -90,7 +69,7 @@ diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/d
  #include <drm/drm_edid.h>
  #include <drm/drm_eld.h>
  #include <drm/drm_fb_helper.h>
-@@ -2618,7 +2619,7 @@
+@@ -2584,7 +2585,7 @@
  	struct nv50_core *core = nv50_disp(dev)->core;
  	struct drm_connector_state *old_connector_state, *new_connector_state;
  	struct drm_connector *connector;
@@ -99,19 +78,19 @@ diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/d
  	struct drm_crtc *crtc;
  	struct nv50_head *head;
  	struct nv50_head_atom *asyh;
-@@ -2646,6 +2647,59 @@
+@@ -2612,6 +2613,59 @@
  		}
  	}
  
 +	/* soft-DPMS (NVAC/MCP79 EVO-wedge prevention, opt-in via soft_dpms):
 +	 * a pure DPMS-off (CRTC active true->false, mode unchanged) makes the
 +	 * following DPMS-on take the !armh->state.active branch in
-+	 * nv50_head_atomic_check (head.c:373) -> asyh->set.mask=~0 -> a full
++	 * nv50_head_atomic_check (head.c) -> asyh->set.mask=~0 -> a full
 +	 * ~96-dword head re-program is pushed into the live EVO core, which then
 +	 * wedges mid-fetch (busy state 0x0e, GET stuck behind PUT).  Keep the
 +	 * head/core ARMED across the blank by leaving crtc->active true, so the
-+	 * wake takes the selective delta path (head.c:366) and the wedging batch
-+	 * is never emitted -- this reproduces normal-desktop operation (no active
++	 * wake takes the selective delta path and the wedging batch is never
++	 * emitted -- this reproduces normal-desktop operation (no active
 +	 * toggle), the only proven wedge-free state.  Done BEFORE
 +	 * drm_atomic_helper_check so the head's atomic_check sees active==true.
 +	 * The primary plane is re-attached so the still-active CRTC stays valid. */
@@ -159,3 +138,28 @@ diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/d
  	ret = drm_atomic_helper_check(dev, state);
  	if (ret)
  		return ret;
+diff -ruN a/drivers/gpu/drm/nouveau/dispnv50/disp.h b/drivers/gpu/drm/nouveau/dispnv50/disp.h
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.h	2026-06-10 22:21:22.632064152 +0200
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.h	2026-06-10 22:21:22.649880050 +0200
+@@ -7,6 +7,7 @@
+ #include "nouveau_display.h"
+ 
+ extern unsigned int nouveau_disp_recover;
++extern unsigned int nouveau_soft_dpms;
+ 
+ struct nv50_msto;
+ struct nouveau_encoder;
+diff -ruN a/drivers/gpu/drm/nouveau/nouveau_drm.c b/drivers/gpu/drm/nouveau/nouveau_drm.c
+--- a/drivers/gpu/drm/nouveau/nouveau_drm.c	2026-06-10 22:21:22.632656294 +0200
++++ b/drivers/gpu/drm/nouveau/nouveau_drm.c	2026-06-10 22:21:22.650382275 +0200
+@@ -132,6 +132,10 @@
+ unsigned int nouveau_disp_recover = 0;
+ module_param_named(disp_recover, nouveau_disp_recover, uint, 0400);
+ 
++MODULE_PARM_DESC(soft_dpms, "NVAC/MCP79: keep head+core armed across a pure DPMS off/on so the EVO-core-wedging full re-program is never emitted (default: 0 = off)");
++unsigned int nouveau_soft_dpms = 0;
++module_param_named(soft_dpms, nouveau_soft_dpms, uint, 0644);
++
+ static struct drm_driver driver_stub;
+ static struct drm_driver driver_pci;
+ static struct drm_driver driver_platform;

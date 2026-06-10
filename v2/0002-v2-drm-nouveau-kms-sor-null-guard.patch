@@ -1,0 +1,71 @@
+From: Marek Czernohous <marek@czernohous.de>
+Subject: [PATCH v2 2/2] drm/nouveau/kms: guard NULL crtc in nv50_sor_atomic_disable()
+
+nv50_sor_atomic_disable() unconditionally computes
+nv50_head(nv_encoder->crtc) and dereferences the result a few lines
+later.  nv_encoder->crtc is nouveau's own shadow pointer, set in
+.atomic_enable and cleared at the end of .atomic_disable.
+Commit f575f2bdb6c3 ("drm/nouveau/kms/nv50-: Remove (nv_encoder->crtc)
+checks in ->disable callbacks") removed the NULL check here, reasoning that the atomic
+helpers never call ->disable without a crtc.  On NVAC (MCP79) under
+Wayland sessions (observed with Weston's DRM backend and with
+labwc/wlroots) we have hit the NULL case in practice during session
+teardown and VT switches: disable runs without (or after) its matching
+enable, and because nv50_head() is container_of(), the NULL does not
+stay NULL but becomes a small bogus pointer, so the subsequent head
+dereferences fault and the kernel oopses.
+
+Restore the guard, as drm_WARN_ON_ONCE() instead of a silent return:
+a NULL crtc here still indicates a state-tracking inconsistency that
+should stay visible.  Return without touching the output; in this path
+either enable never ran (nothing to tear down) or an earlier disable
+already did the teardown, and the encoder release is handled by the
+commit_tail release loop in both cases.
+
+Fixes: f575f2bdb6c3 ("drm/nouveau/kms/nv50-: Remove (nv_encoder->crtc) checks in ->disable callbacks")
+Cc: <stable@vger.kernel.org>
+Assisted-by: Claude:claude-opus-4-7
+Assisted-by: Claude:claude-opus-4-8
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+---
+v1 -> v2: dropped the nvif_outp_release() call from the early return
+(the release is owned by the commit_tail release loop; calling it here
+released twice and detached the OR before the disable flush); turned
+the silent return into drm_WARN_ON_ONCE(); reworded the commit message
+(the v1 "race between atomic_check and atomic_commit" wording did not
+match the mechanism).
+v1: https://lore.kernel.org/nouveau/20260409172126.115441-3-marek@czernohous.de/
+
+diff -ruN a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c	2026-06-10 22:13:39.455542668 +0200
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c	2026-06-10 22:13:39.473185371 +0200
+@@ -1565,14 +1565,28 @@
+ nv50_sor_atomic_disable(struct drm_encoder *encoder, struct drm_atomic_state *state)
+ {
+ 	struct nouveau_encoder *nv_encoder = nouveau_encoder(encoder);
+-	struct nv50_head *head = nv50_head(nv_encoder->crtc);
++	struct nv50_head *head;
+ #ifdef CONFIG_DRM_NOUVEAU_BACKLIGHT
+ 	struct nouveau_connector *nv_connector = nv50_outp_get_old_connector(state, nv_encoder);
+ 	struct nouveau_drm *drm = nouveau_drm(nv_encoder->base.base.dev);
+ 	struct nouveau_backlight *backlight = nv_connector->backlight;
+ 	struct drm_dp_aux *aux = &nv_connector->aux;
+ 	int ret;
++#endif
+ 
++	/* nv_encoder->crtc is the driver's shadow pointer, set in
++	 * .atomic_enable and cleared at the end of this function.  NULL here
++	 * means disable-without-enable or a double disable; bail before
++	 * container_of() turns it into a bogus head pointer (checking the
++	 * result would not work, container_of(NULL) is never NULL).  The
++	 * encoder release is handled by the commit_tail release loop, so
++	 * there is nothing to clean up here.
++	 */
++	if (drm_WARN_ON_ONCE(encoder->dev, !nv_encoder->crtc))
++		return;
++	head = nv50_head(nv_encoder->crtc);
++
++#ifdef CONFIG_DRM_NOUVEAU_BACKLIGHT
+ 	if (backlight && backlight->uses_dpcd) {
+ 		ret = drm_edp_backlight_disable(aux, &backlight->edp_info);
+ 		if (ret < 0)
