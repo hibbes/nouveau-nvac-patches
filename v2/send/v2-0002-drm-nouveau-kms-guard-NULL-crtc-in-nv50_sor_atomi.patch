@@ -1,5 +1,13 @@
+From 66ea307dd4fa080db27b2b9a0caa31b562d72c2b Mon Sep 17 00:00:00 2001
+Message-ID: <66ea307dd4fa080db27b2b9a0caa31b562d72c2b.1781162589.git.marek@czernohous.de>
+In-Reply-To: <cover.1781162589.git.marek@czernohous.de>
+References: <cover.1781162589.git.marek@czernohous.de>
+From: Marek Czernohous <mczernohous@gmail.com>
+Date: Thu, 11 Jun 2026 09:23:09 +0200
+Subject: [PATCH v2 2/2] drm/nouveau/kms: guard NULL crtc in
+ nv50_sor_atomic_disable()
+
 From: Marek Czernohous <marek@czernohous.de>
-Subject: [PATCH v2 2/2] drm/nouveau/kms: guard NULL crtc in nv50_sor_atomic_disable()
 
 nv50_sor_atomic_disable() unconditionally computes
 nv50_head(nv_encoder->crtc) and dereferences the result a few lines
@@ -38,10 +46,14 @@ the silent return into drm_WARN_ON_ONCE(); reworded the commit message
 match the mechanism).
 v1: https://lore.kernel.org/nouveau/20260409172126.115441-3-marek@czernohous.de/
 
-diff -ruN a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/dispnv50/disp.c
---- a/drivers/gpu/drm/nouveau/dispnv50/disp.c	2026-06-10 22:13:39.455542668 +0200
-+++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c	2026-06-10 22:13:39.473185371 +0200
-@@ -1565,14 +1565,28 @@
+ drivers/gpu/drm/nouveau/dispnv50/disp.c | 16 +++++++++++++++-
+ 1 file changed, 15 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+index 6c3a871..597bc64 100644
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+@@ -1565,14 +1565,28 @@ static void
  nv50_sor_atomic_disable(struct drm_encoder *encoder, struct drm_atomic_state *state)
  {
  	struct nouveau_encoder *nv_encoder = nouveau_encoder(encoder);
@@ -54,7 +66,7 @@ diff -ruN a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/di
  	struct drm_dp_aux *aux = &nv_connector->aux;
  	int ret;
 +#endif
- 
++
 +	/* nv_encoder->crtc is the driver's shadow pointer, set in
 +	 * .atomic_enable and cleared at the end of this function.  NULL here
 +	 * means disable-without-enable or a double disable; bail before
@@ -66,8 +78,11 @@ diff -ruN a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/di
 +	if (drm_WARN_ON_ONCE(encoder->dev, !nv_encoder->crtc))
 +		return;
 +	head = nv50_head(nv_encoder->crtc);
-+
+ 
 +#ifdef CONFIG_DRM_NOUVEAU_BACKLIGHT
  	if (backlight && backlight->uses_dpcd) {
  		ret = drm_edp_backlight_disable(aux, &backlight->edp_info);
  		if (ret < 0)
+-- 
+2.53.0
+

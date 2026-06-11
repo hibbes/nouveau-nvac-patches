@@ -10,4 +10,7 @@ and verification: `../docs/specs/2026-06-10-v2-qa.md`.
   without the erroneous nvif_outp_release() from v1.
 
 0003 (HPD retry) is intentionally NOT part of the v2 stable series.
-Held until Fab Stz's Tested-by is confirmed before sending to the list.
+Fab Stz confirmed his Tested-by on 2026-06-11; the series was sent to the
+list the same day (To: Lyude Paul, Danilo Krummrich; Cc: dri-devel, nouveau,
+linux-kernel, Fab Stz). `send/` holds the exact files as sent
+(git format-patch output, cover Message-ID cover.1781162589).
