@@ -1,5 +1,8 @@
+From a7af2404cd582cf355a314ef2474c550b90242d8 Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
-Subject: [PATCH v3 2/2] drm/nouveau/kms: guard NULL crtc in nv50_sor_atomic_disable()
+Date: Thu, 11 Jun 2026 13:01:57 +0200
+Subject: [PATCH v3 2/2] drm/nouveau/kms: guard NULL crtc in
+ nv50_sor_atomic_disable()
 
 nv50_sor_atomic_disable() unconditionally computes
 nv50_head(nv_encoder->crtc) and dereferences the result a few lines
@@ -53,10 +56,14 @@ the silent return into drm_WARN_ON_ONCE(); reworded the commit message.
 v2: https://lore.kernel.org/all/66ea307dd4fa080db27b2b9a0caa31b562d72c2b.1781162589.git.marek@czernohous.de/
 v1: https://lore.kernel.org/nouveau/20260409172126.115441-3-marek@czernohous.de/
 
-diff -ruN a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/dispnv50/disp.c
---- a/drivers/gpu/drm/nouveau/dispnv50/disp.c	2026-06-11 12:25:19.908858910 +0200
-+++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c	2026-06-11 13:00:03.894384563 +0200
-@@ -1565,16 +1565,36 @@
+ drivers/gpu/drm/nouveau/dispnv50/disp.c | 30 ++++++++++++++++++++-----
+ 1 file changed, 25 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+index 6c3a871..47e15a4 100644
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+@@ -1565,16 +1565,36 @@ static void
  nv50_sor_atomic_disable(struct drm_encoder *encoder, struct drm_atomic_state *state)
  {
  	struct nouveau_encoder *nv_encoder = nouveau_encoder(encoder);
@@ -98,3 +105,6 @@ diff -ruN a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/di
  		if (ret < 0)
  			NV_ERROR(drm, "Failed to disable backlight on [CONNECTOR:%d:%s]: %d\n",
  				 nv_connector->base.base.id, nv_connector->base.name, ret);
+-- 
+2.53.0
+

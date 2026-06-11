@@ -1,0 +1,70 @@
+From a7af2404cd582cf355a314ef2474c550b90242d8 Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
+Date: Thu, 11 Jun 2026 13:01:57 +0200
+Subject: [PATCH v3 0/2] drm/nouveau: NVAC (MCP79) MSI rearm + SOR-disable NULL guard
+
+(v3 follows up on this morning's v2 posting twice over: those mails
+went out with a duplicated in-body From: line and broken threading due
+to a send-email misconfiguration on my side, and the Sashiko AI review
+correctly pointed out that the new guard in 2/2 sat below a connector
+dereference it was meant to protect.  Patch 1 is unchanged; please
+disregard the earlier copies.  Previous posting:
+https://lore.kernel.org/all/cover.1781162589.git.marek@czernohous.de/ )
+
+This is v3 of the NVAC (MCP79/MCP7A) stability series, narrowed to the
+two changes that are genuinely stable material and reworked after review
+plus an independent second-machine test.
+
+The original v1 [1] was a three-patch series. Since then it has had a
+two-month daily-driver soak on my Apple Mac mini (early 2009, MCP79) and an independent
+test by Fab Stz on a second machine (iMac9,1 / MCP79, 6.12.90, X11/KDE 6),
+who confirmed the system is more stable with the series and provided a
+Tested-by. After an internal review pass:
+
+  Patch 1 (MSI rearm): NVAC re-arms MSI through the MMIO mirror of PCI
+    config space, which is unreliable on this IGP; a missed re-arm leaves
+    the interrupt line dead and the GPU wedges. v1 switched the whole
+    shared g94_pci_func (ten chipsets); v2 narrows this to a dedicated
+    mcp79 pci func so only the tested chipset (0xac) changes, matching the
+    existing g92 precedent.  The stable tag is annotated v6.16+ (the new
+    file uses the .cfg member added there); older LTS trees want the
+    era-specific one-line msi_rearm switch instead, offered in 1/2.
+
+  Patch 2 (SOR disable NULL guard): nv50_sor_atomic_disable() can run with
+    a NULL nv_encoder->crtc under Wayland session teardown / VT switches,
+    and because the deref goes through container_of() the NULL becomes a
+    bogus pointer that faults. v2 restores the guard as drm_WARN_ON_ONCE()
+    and, unlike v1, does not call nvif_outp_release() in the early return
+    (that path is owned by the commit_tail release loop; the v1 form could
+    release twice and detach the OR before the disable flush).
+
+The v1 patch 3 (HPD link-check retry) is intentionally dropped from this
+series: it is a behavioral workaround that sleeps under mode_config.mutex,
+not an obviously-correct fix, so it does not meet the stable bar. I will
+revisit it separately if it is still needed.
+
+Both patches carry Fixes: and Cc: stable tags. Per-patch changelogs
+are under the --- in each patch.
+
+Disclosure: this work was done with assistance from an AI coding assistant
+(Anthropic's Claude, Opus 4.7 and 4.8); the analysis and conclusions are
+mine and have been verified on hardware. Each patch also carries an
+Assisted-by trailer to that effect.
+
+[1] https://lore.kernel.org/nouveau/20260409172126.115441-1-marek@czernohous.de/
+
+Marek Czernohous (2):
+  drm/nouveau/pci: use config-space MSI rearm on MCP79/MCP7A (NVAC)
+  drm/nouveau/kms: guard NULL crtc in nv50_sor_atomic_disable()
+
+ drivers/gpu/drm/nouveau/dispnv50/disp.c       | 30 +++++++++++++---
+ .../gpu/drm/nouveau/include/nvkm/subdev/pci.h |  1 +
+ .../gpu/drm/nouveau/nvkm/engine/device/base.c |  2 +-
+ .../gpu/drm/nouveau/nvkm/subdev/pci/Kbuild    |  1 +
+ .../gpu/drm/nouveau/nvkm/subdev/pci/mcp79.c   | 35 +++++++++++++++++++
+ 5 files changed, 63 insertions(+), 6 deletions(-)
+ create mode 100644 drivers/gpu/drm/nouveau/nvkm/subdev/pci/mcp79.c
+
+-- 
+2.53.0
+
