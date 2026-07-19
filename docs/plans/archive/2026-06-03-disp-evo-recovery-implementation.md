@@ -1,5 +1,9 @@
 # Patch 0010: reactive EVO display-channel recovery — Implementation Plan
 
+> **Status 2026-07-19: UMGESETZT, archiviert.** Gegen den Code verifiziert
+> (Belege: `docs/audits/2026-07-19-plan-triage.md`). Die Checkboxen unten wurden nie nachgefuehrt
+> und sind ohne Aussagekraft.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Recover a wedged nv50 EVO core/base DMA channel at runtime (no reboot) by, on `nv50_dmac_wait` timeout, deferring a fini/init recovery (with the core unstick) of the stuck channel via a workqueue, gated behind a default-off module parameter.

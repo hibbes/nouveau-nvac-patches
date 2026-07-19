@@ -1,5 +1,11 @@
 # nv04_fifo Recovery Implementation Plan
 
+> **Status 2026-07-19: TEILWEISE UMGESETZT.** Die Checkboxen unten wurden nie
+> nachgefuehrt; das meiste ist geliefert (Belege: `docs/audits/2026-07-19-plan-triage.md`).
+> Wirklich offen ist nur:
+> - Task 19: Upstream-/Mailinglisten-Submission von Patch 0006 (die als v2 gesendete Serie vom 11.06. umfasst nur 0001+0002; 0006 ist laut README "local only")
+> - Task 20: formaler Abschluss von Phase 6 (Soak laut README noch "in progress", kein dokumentiertes Soak-Ende)
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement zweistufige Recovery-Pipeline in `drivers/gpu/drm/nouveau/nvkm/engine/fifo/` (Tier-1 channel-kill via `nvkm_chan_error`, Tier-2 device-wedge via `drm_dev_wedged_event`) plus tracepoints und module params, so dass Tesla-FIFO-Faults nicht mehr silent durchlaufen.
