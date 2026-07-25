@@ -1,0 +1,315 @@
+From: Marek Czernohous <marek@czernohous.de>
+Date: 2026-06-03
+Subject: [PATCH] drm/nouveau/disp: reactive recovery for wedged EVO channels
+
+On NVAC (Tesla / GeForce 9400M) the nv50 EVO core and base/window DMA
+pushbuffer channels can wedge after a long display-off period: the
+hardware stops advancing the channel GET pointer, so the first
+atomic_commit after re-enable blocks in nv50_dmac_wait() for the full
+2 s timeout and returns -ETIMEDOUT after WARN_ON(1). The symptom is
+"core notifier timeout" followed by "base-1: timeout", and the only
+existing code that unsticks such a channel (nv50_disp_core_init) runs
+only on suspend/resume/reload, never on the DPMS/atomic path, so today
+only a reboot recovers it.
+
+Add an opt-in reactive recovery. On nv50_dmac_wait() timeout, when the
+new module parameter disp_recover is set, schedule a workqueue worker
+that, under disp->mutex, drives the stuck channel through a controlled
+fini/init cycle via a new nvif disp-chan recover method
+(NVIF_DISP_CHAN_V0_RECOVER). The core channel is recovered first to
+clear the core/base interlock, then the channel that timed out; the
+wedged pushbuffer is discarded (suspend_put forced to 0) and the
+client-side pushbuffer pointers reset to an empty ring so the next
+commit starts clean. The recover primitive logs the channel control
+register (0x610200) and GET mirror (0x640000) before the cycle to
+capture the real wedge state. The worker is cancelled at display
+teardown and bails if the core channel is gone.
+
+disp_recover defaults to 0, so the timeout path is unchanged (one
+branch test) until the parameter is explicitly enabled. NVAC/MCP79
+only; reactive recovery is still unproven and gated for that reason.
+
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+Assisted-by: Claude Opus 4.8
+---
+diff --git a/drivers/gpu/drm/nouveau/include/nvif/if0014.h b/drivers/gpu/drm/nouveau/include/nvif/if0014.h
+--- a/drivers/gpu/drm/nouveau/include/nvif/if0014.h
++++ b/drivers/gpu/drm/nouveau/include/nvif/if0014.h
+@@ -10,4 +10,11 @@
+ 		__u64 pushbuf;
+ 	} v0;
+ };
++
++#define NVIF_DISP_CHAN_V0_RECOVER 0x00
++
++struct nvif_disp_chan_recover_v0 {
++	__u8  version;
++	__u8  pad01[7];
++};
+ #endif
+diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/disp/chan.h b/drivers/gpu/drm/nouveau/nvkm/engine/disp/chan.h
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/disp/chan.h
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/disp/chan.h
+@@ -31,6 +31,7 @@
+ int nvkm_disp_core_new(const struct nvkm_oclass *, void *, u32, struct nvkm_object **);
+ int nvkm_disp_chan_new(const struct nvkm_oclass *, void *, u32, struct nvkm_object **);
+ int nvkm_disp_wndw_new(const struct nvkm_oclass *, void *, u32, struct nvkm_object **);
++int nvkm_disp_chan_recover(struct nvkm_disp_chan *);
+ 
+ struct nvkm_disp_chan_func {
+ 	int (*push)(struct nvkm_disp_chan *, u64 object);
+diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/disp/chan.c b/drivers/gpu/drm/nouveau/nvkm/engine/disp/chan.c
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/disp/chan.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/disp/chan.c
+@@ -25,6 +25,7 @@
+ #include <core/ramht.h>
+ 
+ #include <nvif/if0014.h>
++#include <nvif/unpack.h>
+ 
+ static int
+ nvkm_disp_chan_ntfy(struct nvkm_object *object, u32 type, struct nvkm_event **pevent)
+@@ -161,11 +162,66 @@
+ 	return chan;
+ }
+ 
++int
++nvkm_disp_chan_recover(struct nvkm_disp_chan *chan)
++{
++	struct nvkm_subdev *subdev = &chan->disp->engine.subdev;
++	struct nvkm_device *device = subdev->device;
++	int ctrl = chan->chid.ctrl;
++
++	if (!chan->func->init || !chan->func->fini)
++		return -EINVAL;
++
++	nvkm_warn(subdev, "chan %d recover: ctrl 0x610200=%08x put 0x640000=%08x\n",
++		  chan->chid.user,
++		  nvkm_rd32(device, 0x610200 + ctrl * 0x10),
++		  nvkm_rd32(device, 0x640000 + ctrl * 0x1000));
++
++	chan->func->fini(chan);
++	if (chan->func->intr)
++		chan->func->intr(chan, false);
++	if (chan->func->intr)
++		chan->func->intr(chan, true);
++
++	/* Discard the wedged channel's pending pushbuffer: re-arm at PUT == 0
++	 * so the client-side reset in nv50_dmac_recover() matches the HW.
++	 */
++	chan->suspend_put = 0;
++	return chan->func->init(chan);
++}
++
++static int
++nvkm_disp_chan_mthd_recover(struct nvkm_disp_chan *chan, void *argv, u32 argc)
++{
++	union {
++		struct nvif_disp_chan_recover_v0 v0;
++	} *args = argv;
++	int ret = -ENOSYS;
++
++	if (!(ret = nvif_unpack(ret, &argv, &argc, args->v0, 0, 0, false)))
++		return nvkm_disp_chan_recover(chan);
++	return ret;
++}
++
++static int
++nvkm_disp_chan_mthd(struct nvkm_object *object, u32 mthd, void *argv, u32 argc)
++{
++	struct nvkm_disp_chan *chan = nvkm_disp_chan(object);
++
++	switch (mthd) {
++	case NVIF_DISP_CHAN_V0_RECOVER:
++		return nvkm_disp_chan_mthd_recover(chan, argv, argc);
++	default:
++		return -EINVAL;
++	}
++}
++
+ static const struct nvkm_object_func
+ nvkm_disp_chan = {
+ 	.dtor = nvkm_disp_chan_dtor,
+ 	.init = nvkm_disp_chan_init,
+ 	.fini = nvkm_disp_chan_fini,
++	.mthd = nvkm_disp_chan_mthd,
+ 	.ntfy = nvkm_disp_chan_ntfy,
+ 	.map = nvkm_disp_chan_map,
+ 	.sclass = nvkm_disp_chan_child_get,
+diff --git a/drivers/gpu/drm/nouveau/nouveau_drm.c b/drivers/gpu/drm/nouveau/nouveau_drm.c
+--- a/drivers/gpu/drm/nouveau/nouveau_drm.c
++++ b/drivers/gpu/drm/nouveau/nouveau_drm.c
+@@ -128,6 +128,10 @@
+ unsigned int nouveau_fifo_wedge_window_ms = 60000;
+ module_param_named(fifo_wedge_window_ms, nouveau_fifo_wedge_window_ms, uint, 0400);
+ 
++MODULE_PARM_DESC(disp_recover, "Attempt runtime recovery of a wedged EVO display channel (default: 0 = off)");
++unsigned int nouveau_disp_recover = 0;
++module_param_named(disp_recover, nouveau_disp_recover, uint, 0400);
++
+ static struct drm_driver driver_stub;
+ static struct drm_driver driver_pci;
+ static struct drm_driver driver_platform;
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.h b/drivers/gpu/drm/nouveau/dispnv50/disp.h
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.h
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.h
+@@ -6,6 +6,8 @@
+ 
+ #include "nouveau_display.h"
+ 
++extern unsigned int nouveau_disp_recover;
++
+ struct nv50_msto;
+ struct nouveau_encoder;
+ 
+@@ -28,6 +30,9 @@
+ 	struct nouveau_bo *sync;
+ 
+ 	struct mutex mutex;
++
++	struct work_struct recover_work;
++	struct nv50_dmac *recover_dmac;
+ };
+ 
+ static inline struct nv50_disp *
+@@ -62,6 +67,8 @@
+ struct nv50_dmac {
+ 	struct nv50_chan base;
+ 
++	struct nv50_disp *disp;   /* added: lets a stuck dmac reach its disp */
++
+ 	struct nvif_push push;
+ 
+ 	struct nvif_object sync;
+@@ -93,6 +100,10 @@
+ 		     s64 syncbuf, struct nv50_dmac *dmac);
+ void nv50_dmac_destroy(struct nv50_dmac *);
+ 
++int  nv50_dmac_recover(struct nv50_dmac *);
++void nv50_disp_recover_schedule(struct nv50_dmac *);
++void nv50_disp_recover_work(struct work_struct *);
++
+ /*
+  * For normal encoders this just returns the encoder. For active MST encoders,
+  * this returns the real outp that's driving displays on the topology.
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+@@ -213,6 +213,8 @@
+ 		if ((free = nv50_dmac_free(dmac)) >= size)
+ 			break;
+ 	) < 0) {
++		if (nouveau_disp_recover)
++			nv50_disp_recover_schedule(dmac);
+ 		WARN_ON(1);
+ 		return -ETIMEDOUT;
+ 	}
+@@ -276,6 +278,8 @@
+ 	if (ret)
+ 		return ret;
+ 
++	dmac->disp = nv50_disp(drm->dev);
++
+ 	if (syncbuf < 0)
+ 		return 0;
+ 
+@@ -2818,6 +2822,8 @@
+ {
+ 	struct nv50_disp *disp = nv50_disp(dev);
+ 
++	cancel_work_sync(&disp->recover_work);
++
+ 	nv50_audio_component_fini(nouveau_drm(dev));
+ 
+ 	nvif_object_unmap(&disp->caps);
+@@ -2844,6 +2850,7 @@
+ 		return -ENOMEM;
+ 
+ 	mutex_init(&disp->mutex);
++	INIT_WORK(&disp->recover_work, nv50_disp_recover_work);
+ 
+ 	nouveau_display(dev)->priv = disp;
+ 	nouveau_display(dev)->dtor = nv50_display_destroy;
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/Kbuild b/drivers/gpu/drm/nouveau/dispnv50/Kbuild
+--- a/drivers/gpu/drm/nouveau/dispnv50/Kbuild
++++ b/drivers/gpu/drm/nouveau/dispnv50/Kbuild
+@@ -1,6 +1,7 @@
+ # SPDX-License-Identifier: MIT
+ nouveau-y += dispnv50/disp.o
+ nouveau-y += dispnv50/lut.o
++nouveau-y += dispnv50/recover.o
+ 
+ nouveau-y += dispnv50/core.o
+ nouveau-y += dispnv50/core507d.o
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/recover.c b/drivers/gpu/drm/nouveau/dispnv50/recover.c
+new file mode 100644
+--- /dev/null
++++ b/drivers/gpu/drm/nouveau/dispnv50/recover.c
+@@ -0,0 +1,67 @@
++// SPDX-License-Identifier: MIT
++#include "disp.h"
++#include "core.h"
++
++#include <nvif/if0014.h>
++#include <nvif/object.h>
++#include <nvif/push.h>
++
++/* Re-arm a wedged EVO channel via the nvkm recover method, then resync the
++ * client-side pushbuffer state to the freshly re-armed HW (PUT == 0).
++ */
++int
++nv50_dmac_recover(struct nv50_dmac *dmac)
++{
++	struct nvif_push *push = &dmac->push;
++	struct {
++		struct nvif_disp_chan_recover_v0 v0;
++	} args = { .v0.version = 0 };
++	int ret;
++
++	ret = nvif_object_mthd(&dmac->base.user, NVIF_DISP_CHAN_V0_RECOVER,
++			       &args, sizeof(args));
++	if (ret)
++		return ret;
++
++	dmac->cur = 0;
++	dmac->put = 0;
++	push->bgn = push->cur = dmac->push.mem.object.map.ptr;
++	push->end = push->cur;   /* empty ring, like nv50_dmac_create */
++	return 0;
++}
++
++void
++nv50_disp_recover_work(struct work_struct *work)
++{
++	struct nv50_disp *disp = container_of(work, typeof(*disp), recover_work);
++	struct nv50_dmac *dmac = READ_ONCE(disp->recover_dmac);
++
++	mutex_lock(&disp->mutex);
++
++	if (!disp->core) {
++		WRITE_ONCE(disp->recover_dmac, NULL);
++		mutex_unlock(&disp->mutex);
++		return;
++	}
++
++	/* Core first: clears the core<->base interlock that stalls base. */
++	(void)nv50_dmac_recover(&disp->core->chan);
++
++	/* Then the specific channel that timed out, if it was not the core. */
++	if (dmac && dmac != &disp->core->chan)
++		(void)nv50_dmac_recover(dmac);
++
++	WRITE_ONCE(disp->recover_dmac, NULL);
++	mutex_unlock(&disp->mutex);
++}
++
++void
++nv50_disp_recover_schedule(struct nv50_dmac *dmac)
++{
++	struct nv50_disp *disp = dmac->disp;
++
++	if (!disp)
++		return;
++	WRITE_ONCE(disp->recover_dmac, dmac);
++	schedule_work(&disp->recover_work);
++}

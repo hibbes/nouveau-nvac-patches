@@ -1,0 +1,125 @@
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+@@ -2175,6 +2175,82 @@
+ 	}
+ }
+ 
++/*
++ * NVAC (MCP79/MCP7A) display-floor pin.
++ *
++ * The EVO core display PLL on NVAC is derived from the shared core clock
++ * domain.  A userspace/ACPI reclock that drops the core pstate while a head
++ * is scanning out can re-program the shared PLL underneath an active scanout
++ * and wedge the EVO base channel.  While ANY head is active, pin nvkm's
++ * display floor (clk->dstate) to the pstate-0x0e operating point so a reclock
++ * cannot pull the shared PLL below the boot-pin point; release the floor
++ * (dstate 0) once no head is active.
++ *
++ * Rationale on safety: NVAC carries an nv40_volt rail (device->volt != NULL),
++ * so the 0x03<->0x0e transition is NOT voltage-neutral.  The net safety here
++ * does NOT come from voltage neutrality -- it comes from the
++ * no-op-while-already-pinned guard in nvkm_pstate_work()
++ * (subdev/clk/base.c: "if (pstate != clk->pstate)"), which skips any actual
++ * re-program while we are already sitting at the floor.  We additionally only
++ * call nvkm_clk_dstate() when the requested floor changes, because that path
++ * does schedule_work() + wait_event() and we must not incur a workqueue
++ * round-trip on every page flip.
++ */
++static void
++nv50_disp_pclk_floor(struct drm_device *dev)
++{
++	struct nouveau_drm *drm = nouveau_drm(dev);
++	struct nvkm_device *device = nvxx_device(drm);
++	struct nvkm_clk *clk = device->clk;
++	struct nvkm_pstate *pstate;
++	struct drm_crtc *crtc;
++	bool active = false;
++	int floor = 0, index = -1, i = 0;
++
++	/* Default-off and strictly chipset-gated to NVAC (0x0ac). */
++	if (!nouveau_pclk_floor || !clk || device->chipset != 0x0ac)
++		return;
++
++	/* "Any head active?" via a GLOBAL crtc scan -- a plane-only/pageflip
++	 * commit touches no crtc in the atomic state, so scanning the state
++	 * (for_each_*_crtc_in_state) would see no crtc and wrongly drop the
++	 * floor mid-scanout.
++	 */
++	drm_for_each_crtc(crtc, dev) {
++		if (crtc->state && crtc->state->active) {
++			active = true;
++			break;
++		}
++	}
++
++	if (active) {
++		/* Resolve the REAL pstate-0x0e index by walking clk->states
++		 * (struct nvkm_pstate.pstate); the index is the position in
++		 * that list, matching nvkm_pstate_prog().  Do NOT use
++		 * state_nr-1, which could overshoot the boot-pin operating
++		 * point.
++		 */
++		list_for_each_entry(pstate, &clk->states, head) {
++			if (pstate->pstate == 0x0e) {
++				index = i;
++				break;
++			}
++			i++;
++		}
++		if (index < 0)
++			return; /* no 0x0e operating point -- bail safely */
++		floor = index;
++	}
++
++	/* clk->dstate is the currently-pinned display floor and the only
++	 * value nvkm_clk_dstate() writes there; use it as the last-set
++	 * tracker so we only poke nvkm (and eat the workqueue round-trip)
++	 * when the floor actually changes.
++	 */
++	if (floor != clk->dstate)
++		nvkm_clk_dstate(clk, floor, 0);
++}
++
+ static void
+ nv50_disp_atomic_commit_wndw(struct drm_atomic_state *state, u32 *interlock)
+ {
+@@ -2508,6 +2584,11 @@
+ 	drm_atomic_helper_commit_cleanup_done(state);
+ 	drm_atomic_state_put(state);
+ 
++	/* Commit is complete: (re)evaluate the NVAC display pclk floor against
++	 * the now-current crtc states (no-op on other chipsets / param off).
++	 */
++	nv50_disp_pclk_floor(dev);
++
+ 	/* Drop the RPM ref we got from nv50_disp_atomic_commit() */
+ 	pm_runtime_mark_last_busy(dev->dev);
+ 	pm_runtime_put_autosuspend(dev->dev);
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.h
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.h
+@@ -11,6 +11,11 @@
+ extern unsigned int nouveau_soft_dpms_blank;
+ extern unsigned int nouveau_soft_dpms_blank_timeout_ms;
+ 
++/* NVAC display-floor pin (see nv50_disp_atomic_commit_tail); the module
++ * parameter itself is defined in nouveau_drm.c.
++ */
++extern int nouveau_pclk_floor;
++
+ struct nv50_msto;
+ struct nouveau_encoder;
+ 
+--- a/drivers/gpu/drm/nouveau/nouveau_drm.c
++++ b/drivers/gpu/drm/nouveau/nouveau_drm.c
+@@ -144,6 +144,11 @@
+ unsigned int nouveau_soft_dpms_blank_timeout_ms = 0;
+ module_param_named(soft_dpms_blank_timeout_ms, nouveau_soft_dpms_blank_timeout_ms, uint, 0644);
+ 
++MODULE_PARM_DESC(pclk_floor, "NVAC only: pin display pclk floor to pstate 0x0e "
++		            "while a head is active (default: 0 = disabled)");
++int nouveau_pclk_floor = 0;
++module_param_named(pclk_floor, nouveau_pclk_floor, int, 0400);
++
+ static struct drm_driver driver_stub;
+ static struct drm_driver driver_pci;
+ static struct drm_driver driver_platform;

@@ -1,0 +1,302 @@
+From: Marek Czernohous <mczernohous@gmail.com>
+Date: Sat, 25 Jul 2026 16:45:00 +0200
+Subject: [PATCH] drm/nouveau/fifo: Tier-0 escalation ladder for Tesla CACHE_ERROR/DMA_PUSHER (0006-v3)
+
+Rev 2 (post adversarial review, 26 agents). First faults on a channel now get mainline
+behaviour (skip/drop and resume, channel survives); the Tier-1 kill only fires when the
+SAME channel object collects fifo_kill_count faults (default 3) within
+fifo_kill_window_ms (anchored, default 10000). fifo_kill_count=1 restores legacy
+kill-on-first, 0 never kills. Tier-2 keeps seeing every fault; the killed tracepoint
+moved to the actual kill. Review fixes: the per-chid streak is invalidated in
+nvkm_chan_del so a recycled channel object cannot inherit it (SLUB hands back the same
+address in respawn loops), and already errored channels bypass the ladder entirely.
+Plus K2 diagnostics (log only): CACHE_ERROR line carries pull0/engine/push1, spurious
+and hash-failed annotations, and a gr-trap age fed from nv50_gr_intr.
+---
+--- a/drivers/gpu/drm/nouveau/include/nvkm/engine/fifo.h
++++ b/drivers/gpu/drm/nouveau/include/nvkm/engine/fifo.h
+@@ -56,6 +56,7 @@
+ struct nvkm_chan *nvkm_uchan_chan(struct nvkm_object *);
+ 
+ #define NVKM_FIFO_WEDGE_RING_MAX 32
++#define NVKM_FIFO_KILL_CHID_MAX 128	/* Tesla: nv50_fifo_chid_nr */
+ 
+ struct nvkm_fifo_wedge {
+ 	spinlock_t       lock;
+@@ -64,6 +65,14 @@
+ 	u32              head;                                   /* Ring-Head */
+ 	struct work_struct work;                                /* schedules drm_dev_wedged_event */
+ 	atomic_t         wedged;                                /* Tier-2 already fired? */
++
++	/* 0006-v3 Tier-0 escalation ladder: per-chid fault streak.  owner is
++	 * the channel OBJECT identity (guards against chid recycling). */
++	struct {
++		void   *owner;
++		ktime_t first;
++		u32     count;
++	} chfault[NVKM_FIFO_KILL_CHID_MAX];
+ };
+ 
+ struct nvkm_fifo {
+@@ -98,8 +107,15 @@
+ 	spinlock_t lock;
+ 	struct mutex mutex;
+ 	struct nvkm_fifo_wedge wedge;
++
++	/* 0006-v3 K2 diagnostics: timestamp of the last gr trap (ns, 0 = never). */
++	atomic64_t gr_trap_last_ns;
+ };
+ 
++/* 0006-v3 K2: gr-side trap timestamp for CACHE_ERROR correlation (log only). */
++void nvkm_fifo_note_gr_trap(struct nvkm_fifo *);
++s64 nvkm_fifo_gr_trap_age_ms(struct nvkm_fifo *);
++
+ void nvkm_fifo_fault(struct nvkm_fifo *, struct nvkm_fault_data *);
+ void nvkm_fifo_pause(struct nvkm_fifo *, unsigned long *);
+ void nvkm_fifo_start(struct nvkm_fifo *, unsigned long *);
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/priv.h
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/priv.h
+@@ -92,6 +92,8 @@
+ void nv04_fifo_wedge_fini(struct nvkm_fifo *fifo);
+ extern unsigned int nouveau_fifo_wedge_count;
+ extern unsigned int nouveau_fifo_wedge_window_ms;
++extern unsigned int nouveau_fifo_kill_count;
++extern unsigned int nouveau_fifo_kill_window_ms;
+ 
+ int nv10_fifo_chid_nr(struct nvkm_fifo *);
+ 
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/chan.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/chan.c
+@@ -275,6 +275,25 @@
+ 	nvkm_gpuobj_del(&chan->ramfc);
+ 
+ 	if (chan->cgrp) {
++		/* 0006-v3: drop this channel's Tier-0 fault streak before the chid
++		 * is handed out again.  chfault[].owner is an identity token only
++		 * (never dereferenced), but SLUB hands back the same address in a
++		 * respawn loop, so a fresh channel could inherit the streak and be
++		 * killed on its first fault.  wedge.lock stays a leaf here: no
++		 * chan/cgrp spinlock is held at this point. */
++		struct nvkm_fifo *fifo = chan->cgrp->runl->fifo;
++
++		if (chan->id >= 0) {
++			unsigned long flags;
++			typeof(&fifo->wedge.chfault[0]) cf =
++				&fifo->wedge.chfault[chan->id % NVKM_FIFO_KILL_CHID_MAX];
++
++			spin_lock_irqsave(&fifo->wedge.lock, flags);
++			if (cf->owner == chan)
++				cf->owner = NULL;
++			spin_unlock_irqrestore(&fifo->wedge.lock, flags);
++		}
++
+ 		nvkm_chid_put(chan->cgrp->runl->chid, chan->id, &chan->cgrp->lock);
+ 		nvkm_cgrp_unref(&chan->cgrp);
+ 	}
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/recover.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/recover.c
+@@ -18,6 +18,7 @@
+ #include <linux/workqueue.h>
+ #include <linux/jiffies.h>
+ #include <linux/ktime.h>
++#include <linux/math64.h>
+ #include <drm/drm_drv.h>
+ #include <drm/drm_device.h>
+ 
+@@ -42,12 +43,73 @@
+ 	ktime_t now, cutoff;
+ 	u32 i, count;
+ 
+-	if (drm_dev)
+-		trace_nouveau_fifo_chan_killed(drm_dev, chid, fault_type, info);
+-
+ 	chan = nvkm_chan_get_chid(&fifo->engine, chid, &flags);
+ 	if (chan) {
+-		nvkm_chan_error(chan, false);
++		/* 0006-v3 Tier-0 escalation ladder: first faults get upstream's
++		 * behaviour (method skip + cache restart in the caller, channel
++		 * survives).  Kill only when the SAME channel object collects
++		 * fifo_kill_count faults inside fifo_kill_window_ms.
++		 * kill_count==1 restores the legacy kill-on-first-fault, 0 never
++		 * kills (Tier-0 + Tier-2 only).  wedge.lock nests as a leaf inside
++		 * chan->cgrp->lock (held by nvkm_chan_get_chid via
++		 * nvkm_runl_chan_get_chid until nvkm_chan_put); the other takers
++		 * (Tier-2 below after chan_put, and nvkm_chan_del) hold no cgrp
++		 * lock, so no reverse ordering exists.  Keep it that way. */
++		bool kill = (nouveau_fifo_kill_count == 1);
++		u32 seen = 1;
++
++		/* An already killed channel can still be resident and fault again
++		 * (g84/nv50 have no preempt, the handler epilogue re-enables push
++		 * and pull unconditionally).  Do not run it through the ladder: the
++		 * owner=NULL reset on kill would restart the streak, producing bogus
++		 * Tier-0 lines for a dead channel and re-firing the killed
++		 * tracepoint while nvkm_chan_error() is already a no-op.  Tier-2
++		 * below still sees every fault. */
++		if (atomic_read(&chan->errored)) {
++			nvkm_debug(&fifo->engine.subdev,
++				   "ch %d already errored, ignoring fault\n", chid);
++			kill = false;
++			seen = 0;
++		} else if (nouveau_fifo_kill_count > 1) {
++			typeof(&fifo->wedge.chfault[0]) cf =
++				&fifo->wedge.chfault[chid % NVKM_FIFO_KILL_CHID_MAX];
++			unsigned long f2;
++			ktime_t tnow = ktime_get();
++
++			spin_lock_irqsave(&fifo->wedge.lock, f2);
++			if (cf->owner != chan ||
++			    ktime_after(tnow, ktime_add_ms(cf->first,
++							   nouveau_fifo_kill_window_ms))) {
++				cf->owner = chan;
++				cf->first = tnow;
++				cf->count = 0;
++			}
++			seen = ++cf->count;
++			kill = (seen >= nouveau_fifo_kill_count);
++			if (kill)
++				cf->owner = NULL;   /* respawn on same chid starts fresh */
++			spin_unlock_irqrestore(&fifo->wedge.lock, f2);
++		}
++
++		if (kill) {
++			if (drm_dev)
++				trace_nouveau_fifo_chan_killed(drm_dev, chid,
++							       fault_type, info);
++			nvkm_chan_error(chan, false);
++		} else if (seen) {
++			const char *what = (fault_type == NV04_FAULT_DMA_PUSHER) ?
++				"dropping push segment" : "skipping method";
++
++			if (nouveau_fifo_kill_count > 1)
++				nvkm_warn(&fifo->engine.subdev,
++					  "ch %d fault %u/%u in %ums window, %s and resuming (Tier-0)\n",
++					  chid, seen, nouveau_fifo_kill_count,
++					  nouveau_fifo_kill_window_ms, what);
++			else
++				nvkm_warn(&fifo->engine.subdev,
++					  "ch %d fault, kill disabled (fifo_kill_count=0), %s and resuming (Tier-0)\n",
++					  chid, what);
++		}
+ 		nvkm_chan_put(&chan, flags);
+ 	}
+ 
+@@ -106,12 +168,29 @@
+ 	drm_dev_wedged_event(drm_dev, DRM_WEDGE_RECOVERY_REBIND, NULL);
+ }
+ 
++/* 0006-v3 K2: gr-trap timestamp helpers (correlation field, log only). */
++void
++nvkm_fifo_note_gr_trap(struct nvkm_fifo *fifo)
++{
++	atomic64_set(&fifo->gr_trap_last_ns, ktime_get_ns());
++}
++
++s64
++nvkm_fifo_gr_trap_age_ms(struct nvkm_fifo *fifo)
++{
++	u64 t = atomic64_read(&fifo->gr_trap_last_ns);
++
++	return t ? div_u64(ktime_get_ns() - t, NSEC_PER_MSEC) : -1;
++}
++
+ void
+ nv04_fifo_wedge_init(struct nvkm_fifo *fifo)
+ {
+ 	spin_lock_init(&fifo->wedge.lock);
+ 	INIT_WORK(&fifo->wedge.work, nv04_fifo_wedge_work);
+ 	atomic_set(&fifo->wedge.wedged, 0);
++	memset(fifo->wedge.chfault, 0, sizeof(fifo->wedge.chfault));
++	atomic64_set(&fifo->gr_trap_last_ns, 0);
+ }
+ 
+ void
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c
+@@ -339,11 +339,30 @@
+ 			nvkm_debug(subdev, "CACHE_ERROR - ch %d subc %d mthd %04x data %08x (benign, skipped)\n",
+ 				   chid, (mthd >> 13) & 7, mthd & 0x1ffc, data);
+ 		} else {
++			/* 0006-v3 K2 diagnostics (log only, no gating): engine
++			 * nibble + push1 + pull0 + gr-trap age decide, at the NEXT
++			 * incident, whether the puller mis-attributes (spurious)
++			 * and whether gr traps correlate. */
++			u32 engine = nvkm_rd32(device, 0x003280);
++			u32 push1  = nvkm_rd32(device, NV03_PFIFO_CACHE1_PUSH1);
++			u32 subc   = (mthd >> 13) & 7;
++			bool routed = (engine >> (subc * 4)) & 0xf;
++			bool engmthd = (mthd & 0x1ffc) >= 0x0100;
++			s64 gr_age = nvkm_fifo_gr_trap_age_ms(fifo);
++
+ 			chan = nvkm_chan_get_chid(&fifo->engine, chid, &flags);
+ 			nvkm_error(subdev, "CACHE_ERROR - "
+-				   "ch %d [%s] subc %d mthd %04x data %08x\n",
++				   "ch %d [%s] subc %d mthd %04x data %08x "
++				   "pull0 %08x engine %08x push1 %08x "
++				   "gr_trap_age_ms %lld%s%s\n",
+ 				   chid, chan ? chan->name : "unknown",
+-				   (mthd >> 13) & 7, mthd & 0x1ffc, data);
++				   subc, mthd & 0x1ffc, data,
++				   pull0, engine, push1, gr_age,
++				   (routed && engmthd &&
++				    !(pull0 & NV04_PFIFO_CACHE1_PULL0_HASH_FAILED)) ?
++					" (engine-routed mthd, likely spurious)" : "",
++				   (pull0 & NV04_PFIFO_CACHE1_PULL0_HASH_FAILED) ?
++					" (hash-failed)" : "");
+ 			nvkm_chan_put(&chan, flags);
+ 			nv04_fifo_recover(fifo, chid, NV04_FAULT_CACHE_ERROR,
+ 					  ((u64)mthd << 32) | data);
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/gr/nv50.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/gr/nv50.c
+@@ -649,9 +649,13 @@
+ 		nvkm_error(subdev, "DATA_ERROR %08x [%s]\n",
+ 			   ecode, en ? en->name : "");
+ 		show_bitfield &= ~0x00100000;
++		if (device->fifo)
++			nvkm_fifo_note_gr_trap(device->fifo);	/* 0006-v3 K2 */
+ 	}
+ 
+ 	if (stat & 0x00200000) {
++		if (device->fifo)
++			nvkm_fifo_note_gr_trap(device->fifo);	/* 0006-v3 K2 */
+ 		if (!nv50_gr_trap_handler(gr, show, chid, (u64)inst << 12, name))
+ 			show &= ~0x00200000;
+ 		show_bitfield &= ~0x00200000;
+--- a/drivers/gpu/drm/nouveau/nouveau_drm.c
++++ b/drivers/gpu/drm/nouveau/nouveau_drm.c
+@@ -152,6 +152,17 @@
+ unsigned int nouveau_sv_rescue_delay_ms = 150;
+ module_param_named(sv_rescue_delay_ms, nouveau_sv_rescue_delay_ms, uint, 0644);
+ 
++MODULE_PARM_DESC(fifo_kill_count, "faults on same channel within fifo_kill_window_ms "
++	"before the Tier-1 kill (0=never kill, 1=legacy kill-on-first, default 3)");
++unsigned int nouveau_fifo_kill_count = 3;
++module_param_named(fifo_kill_count, nouveau_fifo_kill_count, uint, 0400);
++
++MODULE_PARM_DESC(fifo_kill_window_ms, "per-channel fault streak window in ms for "
++	"fifo_kill_count; anchored at the first fault of a streak and fully reset on "
++	"expiry, not sliding (default 10000)");
++unsigned int nouveau_fifo_kill_window_ms = 10000;
++module_param_named(fifo_kill_window_ms, nouveau_fifo_kill_window_ms, uint, 0400);
++
+ MODULE_PARM_DESC(soft_dpms, "NVAC/MCP79: keep head+core armed across a pure DPMS off/on so the EVO-core-wedging full re-program is never emitted (default: 0 = off)");
+ unsigned int nouveau_soft_dpms = 0;
+ module_param_named(soft_dpms, nouveau_soft_dpms, uint, 0644);
+@@ -1564,6 +1575,17 @@
+ 			nouveau_fifo_wedge_window_ms);
+ 		nouveau_fifo_wedge_window_ms = 60000;
+ 	}
++	if (nouveau_fifo_kill_count > 16) {
++		pr_warn("nouveau: fifo_kill_count=%u exceeds max 16; clamping\n",
++			nouveau_fifo_kill_count);
++		nouveau_fifo_kill_count = 16;
++	}
++	if (nouveau_fifo_kill_window_ms < 100 ||
++	    nouveau_fifo_kill_window_ms > 600000) {
++		pr_warn("nouveau: fifo_kill_window_ms=%u out of range; resetting to 10000\n",
++			nouveau_fifo_kill_window_ms);
++		nouveau_fifo_kill_window_ms = 10000;
++	}
+ 
+ 	nouveau_module_debugfs_init();
+ 

@@ -2,9 +2,11 @@
 
 Out-of-tree Linux kernel patch series providing stability fixes for the
 **NVAC** chipset family (MCP79 / MCP7A integrated GeForce 9400M, part of
-the NVIDIA NV50 / Tesla family). Six small, reviewable patches that
+the NVIDIA NV50 / Tesla family). A series of small, reviewable patches that
 collectively turn an out-of-the-box "boots, but flakes under load"
-configuration into a daily-driver-stable system.
+configuration into a daily-driver-stable system.  Patches 0001-0006 address
+FIFO/PCI/DP stability; 0009-0021 address the two display-side failure classes
+that surfaced later: the EVO supervisor wedge and the channel-kill dead letter.
 
 Maintained by Marek Czernohous (hibbes) since 2026-04 against the NVIDIA
 9400M IGP in an Apple Mac mini Late 2009.
@@ -59,6 +61,16 @@ hardware, and a successful soak period before submission.
 | 0004 | drm/nouveau/fifo/nv04: filter benign CACHE_ERROR from Mesa NV50 bind probe | local only; cosmetic, ML send deferred |
 | 0005 | drm/nouveau/clk: stop reclocking after consecutive failures | local only; userland-side mitigated by nouveau-pstate-daemon v0.2.0, ML send deferred |
 | 0006 | drm/nouveau/fifo: add recovery path for Tesla cache_error/dma_pusher | local only; Tier-1 channel-kill + Tier-2 device-wedge with `drm_dev_wedged_event`; debugfs fault-injector validation Phases 1-5 done, Phase 6 soak in progress |
+| 0009 | drm/nouveau/display: reject vblank enable on inactive CRTC | local only |
+| 0010 | drm/nouveau/disp: reactive EVO channel recovery | local only; dormant knob, superseded by the S3 re-POST watchdog |
+| 0011 | drm/nouveau/disp: soft-DPMS, keep head+core armed across DPMS off/on | local only; prevents the full re-program that wedges the EVO core |
+| 0015 | drm/nouveau/disp: soft-DPMS lean blank suppression | local only; suppresses background base-channel repaints while blanked |
+| 0016 | nvac: reclock pin | local only |
+| 0017 | drm/nouveau/disp: hold flip event while blanked | local only; fixes `validate: -22` redraw corruption caused by 0015 completing flips it had suppressed |
+| 0018 | drm/nouveau/disp: dump EVO push buffer on channel timeout | local only; diagnostics, no behaviour change |
+| 0019 | drm/nouveau: EVO supervisor-handshake rescue + Tesla channel-kill dead-letter fix | **0020a part is an upstream candidate** (see below); rescue half is diagnose-only pending phase confirmation |
+| 0020 | drm/nouveau/fifo: Tier-0 escalation ladder for Tesla CACHE_ERROR/DMA_PUSHER | local only; rework of 0006, first faults survive instead of killing the channel |
+| 0021 | drm/nouveau/disp: compact supervisor snapshot around core updates | local only; diagnostics, no behaviour change |
 
 ### 0001 — pci: use nv46 MSI rearm for G94 (NVAC/MCP79)
 
@@ -245,6 +257,61 @@ bundle, blocked on Phase 6 soak completion.
 `drivers/gpu/drm/nouveau/include/nvkm/engine/fifo.h` (+~15),
 `include/trace/events/nouveau.h` (+~30 for two `TRACE_EVENT`),
 `drivers/gpu/drm/nouveau/nouveau_drm.c` (+~5 for module params).
+
+
+### 0019 — EVO supervisor-handshake rescue and the Tesla channel-kill dead letter
+
+Two independent fixes, each behind its own runtime module parameter.
+
+**`chan_kill_event` (upstream candidate).**  `nouveau_channel_init()` subscribes to
+the channel-killed event only for `FERMI_CHANNEL_GPFIFO` and newer.  On NV50/Tesla
+the subscription therefore never happens, so when the FIFO kills a channel the
+`ERRORED` event is delivered into an empty notifier list,
+`nouveau_fence_context_kill()` never runs, and the killed channel's fences are never
+signalled.  Anything waiting on them waits forever: the display commit tail
+(`drm_atomic_helper_wait_for_fences`, uninterruptible and without timeout) and the
+TTM delayed-delete workers hang in D state, which presents to the user as a frozen
+desktop while the machine itself is still alive.  This is a dma-fence contract
+violation, and the same delivery chain has been running on Fermi and newer for years.
+The patch lowers the class gate to `NV50_CHANNEL_GPFIFO`.
+
+A second, smaller fix in the same file moves `nvif_event_dtor(&chan->kill)` ahead of
+the fence-context teardown in `nouveau_channel_del()`.  Previously a killed event
+arriving during teardown could read a fence context that was already being freed.
+That race exists identically on Fermi and newer; it simply was not reachable on Tesla
+before the gate change.
+
+**`sv_rescue` (local, diagnose-only for now).**  On this MCP79 the EVO supervisor
+handshake occasionally stalls: a core UPDATE is accepted, `0x610030` carries a
+supervisor request, but the corresponding interrupt never latches in `0x610024`, so
+the supervisor worker never runs, the continue write never happens, and the channel
+parks.  Only a re-POST clears it, which in practice means an S3 suspend/resume cycle.
+The patch adds a staged notifier wait that can synthesise the missing interrupt
+behind a four-way guard.  Instrumentation added in 0021 showed that the stall happens
+*after* phase SV2, not at SV1 as first assumed, so the synthesis phase is still being
+determined and the code ships in diagnose-only mode.
+
+### 0020 — fifo: Tier-0 escalation ladder
+
+The original 0006 killed a channel on its first `CACHE_ERROR`.  On this hardware the
+PFIFO cache puller names the *resident* channel rather than the offending one, so an
+unrelated process (in the observed cases the Wayland compositor) could be killed for
+somebody else's fault.  0020 keeps upstream's behaviour for the first faults (skip the
+method or drop the push segment, resume) and only escalates to the kill when the same
+channel object collects `fifo_kill_count` faults inside `fifo_kill_window_ms`.
+The per-channel streak is invalidated when the channel is torn down, so a recycled
+channel object cannot inherit it.  The `CACHE_ERROR` log line was extended with the
+puller state, the engine routing nibble, and the age of the last graphics trap, so the
+next incident can settle whether the attribution is spurious.
+
+### 0018 / 0021 — diagnostics
+
+Neither patch changes behaviour.  0018 dumps the EVO push buffer around the frozen GET
+pointer on any channel timeout; 0021 logs one compact line with the supervisor state
+before and after every core update.  Together they produced the observation that a
+healthy soft-DPMS wake performs no supervisor sequence at all, while the wedging wake
+requests one and then stalls: the wedge needs both a supervisor-requesting commit and
+a swallowed interrupt.
 
 ## Building locally
 

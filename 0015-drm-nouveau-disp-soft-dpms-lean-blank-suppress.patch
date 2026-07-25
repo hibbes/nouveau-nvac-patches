@@ -1,0 +1,288 @@
+From: Marek Czernohous <marek@czernohous.de>
+Date: 2026-06-30
+Subject: [PATCH] drm/nouveau/disp: soft-DPMS lean blank-suppression (no D3) for NVAC/MCP79
+
+On NVAC/MCP79 (GeForce 9400M, Tesla nv50) the EVO base/window channel wedges
+when a fresh-framebuffer plane update is pushed after the head has been
+idle/blanked for a while: nv50_dmac_wait times out and the base pushbuffer
+fetch engine parks (stock MCP79 bug, Debian #976788).  soft_dpms (patch 0011)
+keeps the head/core armed across a pure DPMS off/on so the active-toggle full
+re-program never wedges the core, but a background compositor repaint during
+the blank can still push a base image_set and park the fetch after a long idle.
+
+This is the lean successor to the abandoned 0012/0013 (DP-sink D3 + base
+suppression): it keeps the suppression but drops the D3 sink power-down, which
+was fragile (the wake is invisible to KMS, so D0/retrain had to be guessed from
+commit shapes).  Gated behind a new module parameter soft_dpms_blank (default
+0), independent of soft_dpms, so a normal soft_dpms boot is unchanged.
+
+  - On a pure DPMS-off (asyh->soft_dpms_off, set by 0011) the (blocking) commit
+    tail latches the head: head->soft_dpms_asleep = true, the global
+    nv50_soft_dpms_any_asleep fast-path flag is set, the head pointer and a
+    jiffies stamp are saved.  No EVO traffic, no D3.
+
+  - While latched, nv50_disp_atomic_check neutralises any background plane
+    update on that head by forcing the plane back to its armed framebuffer and
+    geometry, so set.mask==0, nv50_wndw_flush_set is skipped and the base
+    channel sees no traffic (the armed fb stays referenced, the flip event
+    still completes).  The check only READS the latch -- the earlier version
+    that set it in the check ran for TEST_ONLY probes and froze the cursor.  A
+    genuine modeset (mode/active/connector change or crtc disable) is exempted
+    and releases the latch.
+
+  - WAKE is bridged from userspace: a write to soft_dpms_wake (swayidle resume
+    hook) clears the latch and releases the suppression.  No re-flush is needed:
+    the armed head is still scanning the last frame and the next compositor
+    frame goes live once suppression is released.
+
+  - A stale-latch failsafe (soft_dpms_blank_timeout_ms, default 0 = off)
+    releases the latch on the next plane update if no wake arrived within the
+    timeout, so a missed wake hook cannot suppress forever.
+
+Also reset asyh->soft_dpms_off/on in nv50_head_atomic_duplicate_state (per-
+commit flags kmalloc'd there and copied by neither the memcpy nor the field
+list), so the commit-tail latch trigger never reads them indeterminate.
+(Belongs with 0011 upstream.)
+
+Depends on patch 0011.  NVAC/MCP79 only, gated behind soft_dpms_blank, default off.
+
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+Assisted-by: Claude Opus 4.8
+Co-Authored-By: Claude Opus 4.8 <noreply@anthropic.com>
+---
+--- a/drivers/gpu/drm/nouveau/nouveau_drm.c
++++ b/drivers/gpu/drm/nouveau/nouveau_drm.c
+@@ -136,6 +136,14 @@
+ unsigned int nouveau_soft_dpms = 0;
+ module_param_named(soft_dpms, nouveau_soft_dpms, uint, 0644);
+ 
++MODULE_PARM_DESC(soft_dpms_blank, "NVAC/MCP79: while soft_dpms is blanked, suppress background base-channel repaints to avoid the fetch-park wedge after a long idle (lean, no D3; default: 0 = off)");
++unsigned int nouveau_soft_dpms_blank = 0;
++module_param_named(soft_dpms_blank, nouveau_soft_dpms_blank, uint, 0644);
++
++MODULE_PARM_DESC(soft_dpms_blank_timeout_ms, "NVAC/MCP79: soft_dpms_blank stale-latch failsafe in ms; if no wake arrives within this, the next plane update releases suppression (default: 0 = failsafe off)");
++unsigned int nouveau_soft_dpms_blank_timeout_ms = 0;
++module_param_named(soft_dpms_blank_timeout_ms, nouveau_soft_dpms_blank_timeout_ms, uint, 0644);
++
+ static struct drm_driver driver_stub;
+ static struct drm_driver driver_pci;
+ static struct drm_driver driver_platform;
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.h
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.h
+@@ -8,6 +8,8 @@
+ 
+ extern unsigned int nouveau_disp_recover;
+ extern unsigned int nouveau_soft_dpms;
++extern unsigned int nouveau_soft_dpms_blank;
++extern unsigned int nouveau_soft_dpms_blank_timeout_ms;
+ 
+ struct nv50_msto;
+ struct nouveau_encoder;
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+@@ -33,6 +33,7 @@
+ #include <linux/hdmi.h>
+ #include <linux/component.h>
+ #include <linux/iopoll.h>
++#include <linux/jiffies.h>
+ 
+ #include <drm/display/drm_dp_helper.h>
+ #include <drm/display/drm_scdc_helper.h>
+@@ -2190,6 +2191,50 @@
+ 	}
+ }
+ 
++/* soft-DPMS lean blank-suppression (NVAC/MCP79, patch 0015): patch 0011 keeps
++ * the EVO core/head armed across a pure DPMS off/on (no active-toggle wedge),
++ * but a background compositor repaint while blanked still pushes a base-channel
++ * image_set; after a long idle that base push parks the window fetch engine and
++ * wedges (stock MCP79 bug, Debian #976788).  This lean path latches the head
++ * blanked in the (blocking) off-commit tail and, while latched, neutralises
++ * background plane updates in nv50_disp_atomic_check so no base traffic is
++ * emitted.  No D3 sink power-down (that was the abandoned 0012): the armed head
++ * keeps scanning the last frame, so wake is just releasing the latch.  The wake
++ * is invisible to KMS (active stays true), so it is bridged from userspace: a
++ * write to soft_dpms_wake (swayidle resume hook) releases the suppression. */
++static DEFINE_MUTEX(nv50_soft_dpms_wake_lock);
++static struct nv50_head *nv50_soft_dpms_wake_head;
++static bool nv50_soft_dpms_any_asleep;
++
++static int
++nv50_soft_dpms_wake_set(const char *val, const struct kernel_param *kp)
++{
++	struct nv50_head *head;
++
++	if (!nouveau_soft_dpms || !nouveau_soft_dpms_blank)
++		return 0;
++
++	mutex_lock(&nv50_soft_dpms_wake_lock);
++	head = nv50_soft_dpms_wake_head;
++	nv50_soft_dpms_wake_head = NULL;
++	if (head)
++		WRITE_ONCE(head->soft_dpms_asleep, false);
++	WRITE_ONCE(nv50_soft_dpms_any_asleep, false);
++	mutex_unlock(&nv50_soft_dpms_wake_lock);
++
++	pr_info("nouveau: soft-dpms: blank-suppression released (wake bridge)\n");
++	return 0;
++}
++
++static const struct kernel_param_ops nv50_soft_dpms_wake_ops = {
++	.set = nv50_soft_dpms_wake_set,
++};
++static int nv50_soft_dpms_wake_dummy;
++module_param_cb(soft_dpms_wake, &nv50_soft_dpms_wake_ops,
++		&nv50_soft_dpms_wake_dummy, 0200);
++MODULE_PARM_DESC(soft_dpms_wake,
++	"NVAC/MCP79: write to release soft_dpms blank-suppression on wake (pair with swayidle resume)");
++
+ static void
+ nv50_disp_atomic_commit_tail(struct drm_atomic_state *state)
+ {
+@@ -2396,6 +2441,34 @@
+ 	if (atom->lock_core)
+ 		mutex_unlock(&disp->mutex);
+ 
++	/* soft-DPMS lean blank latch (NVAC/MCP79, patch 0015): the kept-armed head
++	 * delta is programmed and the core flush is done.  On a pure DPMS-off
++	 * (asyh->soft_dpms_off, set by patch 0011) latch this head blanked and save
++	 * it for the soft_dpms_wake bridge; the plane suppression in
++	 * nv50_disp_atomic_check then neutralises background repaints so the base
++	 * fetch engine is never parked after a long idle.  No D3, no EVO batch.  The
++	 * off-commit is blocking, so the latch is set before any following flip's
++	 * check reads it.  soft_dpms_blank_jiffies stamps the set time for the
++	 * stale-latch failsafe in the check. */
++	if (nouveau_soft_dpms && nouveau_soft_dpms_blank) {
++		for_each_new_crtc_in_state(state, crtc, new_crtc_state, i) {
++			struct nv50_head_atom *asyh = nv50_head_atom(new_crtc_state);
++			struct nv50_head *nvh = nv50_head(crtc);
++
++			if (!asyh->soft_dpms_off)
++				continue;
++
++			WRITE_ONCE(nvh->soft_dpms_blank_jiffies, jiffies);
++			mutex_lock(&nv50_soft_dpms_wake_lock);
++			nv50_soft_dpms_wake_head = nvh;
++			mutex_unlock(&nv50_soft_dpms_wake_lock);
++			WRITE_ONCE(nvh->soft_dpms_asleep, true);
++			WRITE_ONCE(nv50_soft_dpms_any_asleep, true);
++			NV_INFO(drm, "soft-dpms: %s blank-suppression latched (lean, no D3)\n",
++				crtc->name);
++		}
++	}
++
+ 	list_for_each_entry_safe(outp, outt, &atom->outp, head) {
+ 		list_del(&outp->head);
+ 		kfree(outp);
+@@ -2672,6 +2745,76 @@
+ 		}
+ 	}
+ 
++	/* soft-DPMS lean blank-suppression (NVAC/MCP79, patch 0015): while a head is
++	 * latched blanked (the commit tail set head->soft_dpms_asleep on a soft_dpms
++	 * DPMS-off), neutralise any background plane update targeting it by forcing
++	 * the plane back to its armed framebuffer and geometry.  With the fb
++	 * unchanged, nv50_wndw_atomic_check_acquire leaves asyw->set.image clear and
++	 * equal geometry leaves set.scale/point clear, so set.mask==0:
++	 * nv50_wndw_flush_set is skipped, the base channel sees no traffic and its
++	 * fetch engine is never parked (MCP79 bug, Debian #976788).  The per-crtc
++	 * flip event still completes and the armed fb stays referenced (no
++	 * use-after-free).  This check only READS the latch (set in the blocking
++	 * commit tail, cleared by the wake bridge); it never sets it speculatively,
++	 * the fix for the earlier version that latched in the check (it ran for
++	 * TEST_ONLY probes with no tail to clear it and froze the cursor).  A genuine
++	 * modeset (mode/active/connector change or crtc disable) is exempted and
++	 * releases the latch; a missed wake is caught by the blank_jiffies failsafe
++	 * (soft_dpms_blank_timeout_ms, 0 = off) so suppression cannot persist forever. */
++	if (nouveau_soft_dpms && nouveau_soft_dpms_blank &&
++	    READ_ONCE(nv50_soft_dpms_any_asleep)) {
++		struct drm_plane *plane;
++		struct drm_plane_state *new_plane_state;
++		unsigned int tmo = READ_ONCE(nouveau_soft_dpms_blank_timeout_ms);
++
++		for_each_new_plane_in_state(state, plane, new_plane_state, i) {
++			struct drm_crtc *pcrtc = new_plane_state->crtc;
++			struct drm_crtc_state *pcs;
++			struct nv50_head *nvh;
++			struct drm_plane_state *armed;
++
++			if (!pcrtc)
++				continue;
++			nvh = nv50_head(pcrtc);
++			if (!READ_ONCE(nvh->soft_dpms_asleep))
++				continue;
++
++			/* failsafe: if no wake arrived within the timeout, release the
++			 * latch and let the update through (never suppress forever). */
++			if (tmo && time_after(jiffies,
++					      READ_ONCE(nvh->soft_dpms_blank_jiffies) +
++					      msecs_to_jiffies(tmo))) {
++				WRITE_ONCE(nvh->soft_dpms_asleep, false);
++				WRITE_ONCE(nv50_soft_dpms_any_asleep, false);
++				continue;
++			}
++
++			/* exempt genuine modesets: only plain repaints are suppressed. */
++			pcs = drm_atomic_get_new_crtc_state(state, pcrtc);
++			if (pcs && (pcs->mode_changed || pcs->active_changed ||
++				    pcs->connectors_changed || !pcs->active)) {
++				WRITE_ONCE(nvh->soft_dpms_asleep, false);
++				WRITE_ONCE(nv50_soft_dpms_any_asleep, false);
++				continue;
++			}
++
++			armed = drm_atomic_get_old_plane_state(state, plane);
++			if (!armed || !armed->fb)
++				continue;
++
++			drm_atomic_set_fb_for_plane(new_plane_state, armed->fb);
++			new_plane_state->crtc   = pcrtc;
++			new_plane_state->crtc_x = armed->crtc_x;
++			new_plane_state->crtc_y = armed->crtc_y;
++			new_plane_state->crtc_w = armed->crtc_w;
++			new_plane_state->crtc_h = armed->crtc_h;
++			new_plane_state->src_x  = armed->src_x;
++			new_plane_state->src_y  = armed->src_y;
++			new_plane_state->src_w  = armed->src_w;
++			new_plane_state->src_h  = armed->src_h;
++		}
++	}
++
+ 	ret = drm_atomic_helper_check(dev, state);
+ 	if (ret)
+ 		return ret;
+--- a/drivers/gpu/drm/nouveau/dispnv50/head.h
++++ b/drivers/gpu/drm/nouveau/dispnv50/head.h
+@@ -19,6 +19,17 @@
+ 	struct nv50_crc crc;
+ 	struct nv50_lut olut;
+ 	struct nv50_msto *msto;
++
++	/* soft-DPMS lean blank-suppression (NVAC/MCP79, patch 0015): true while
++	 * this head is blanked by soft_dpms with background base-channel repaints
++	 * suppressed (no D3 sink power-down).  Set in the commit tail on a pure
++	 * DPMS-off, read by the plane suppression in nv50_disp_atomic_check, and
++	 * cleared by the soft_dpms_wake bridge or the stale-latch failsafe.  Zeroed
++	 * at create (kzalloc); accessed with READ_ONCE/WRITE_ONCE (writer in the
++	 * blocking off-commit tail, reader in a later check).  soft_dpms_blank_jiffies
++	 * stamps the latch time so a missed wake cannot suppress forever. */
++	bool soft_dpms_asleep;
++	unsigned long soft_dpms_blank_jiffies;
+ };
+ 
+ struct nv50_head *nv50_head_create(struct drm_device *, int index);
+--- a/drivers/gpu/drm/nouveau/dispnv50/head.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/head.c
+@@ -488,6 +488,12 @@
+ 	asyh->dp = armh->dp;
+ 	asyh->clr.mask = 0;
+ 	asyh->set.mask = 0;
++	/* soft-DPMS (patch 0011/0015): soft_dpms_off/on are per-commit flags
++	 * kmalloc'd here and copied by neither the duplicate memcpy nor the field
++	 * list above.  Reset them so the commit-tail blank latch trigger never
++	 * reads them indeterminate. */
++	asyh->soft_dpms_off = false;
++	asyh->soft_dpms_on  = false;
+ 	return &asyh->state;
+ }
+ 

@@ -1,0 +1,166 @@
+From: Marek Czernohous <mczernohous@gmail.com>
+Date: Sat, 25 Jul 2026 16:20:00 +0200
+Subject: [PATCH] drm/nouveau/disp: compact supervisor snapshot around core updates (0019b)
+
+Diagnosis only, no writes, applies after 0019. Wedge #6 (25.07.) showed via the 0019
+probe that disp->super.pending was 0x20 at the stall: the supervisor sequence had
+already been delivered SV1 AND SV2 and dies after SV2, so the original "SV1 never
+latches" model is wrong and synthesising SV1 would run the wrong phase. To decide the
+real fix we need the same registers from a HEALTHY wake. Adds sv-kick mode 2: one rate
+limited line (super, pending, intr1, worker busy, core ctrl) before and after every
+core update with ntfy. Reference: healthy blanked super 0x140, healthy active 0x540,
+wedged 0x150 (bit 0x10 in 3 of ~11400 samples, all inside the wedge).
+---
+--- a/drivers/gpu/drm/nouveau/include/nvif/if0014.h
++++ b/drivers/gpu/drm/nouveau/include/nvif/if0014.h
+@@ -22,7 +22,8 @@
+ /* Patch 0019: supervisor-handshake rescue kick (nv50 family). */
+ struct nvif_disp_chan_sv_kick_v0 {
+ 	__u8  version;
+-	__u8  mode;	/* 0 = probe (log only); 1 = rescue */
+-	__u8  pad02[6];
++	__u8  mode;	/* 0 = full probe (log); 1 = rescue; 2 = compact snapshot */
++	__u8  tag;	/* mode 2: 0 = pre-update, 1 = post-update */
++	__u8  pad03[5];
+ };
+ #endif
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/disp/chan.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/disp/chan.c
+@@ -213,12 +213,13 @@
+ 	int ret = -ENOSYS;
+ 
+ 	if (!(ret = nvif_unpack(ret, &argv, &argc, args->v0, 0, 0, false))) {
+-		if (args->v0.mode > 1)
++		if (args->v0.mode > 2)
+ 			return -EINVAL;
+ 		/* nv50-family only: register layout 0x610024/0x610030. */
+ 		if (chan->disp->func->super != nv50_disp_super)
+ 			return -ENODEV;
+-		return nv50_disp_sv_rescue(chan->disp, args->v0.mode);
++		return nv50_disp_sv_rescue(chan->disp, args->v0.mode,
++					   args->v0.tag);
+ 	}
+ 	return ret;
+ }
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/disp/priv.h
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/disp/priv.h
+@@ -52,7 +52,7 @@
+ void nv50_disp_intr(struct nvkm_disp *);
+ extern const struct nvkm_enum nv50_disp_intr_error_type[];
+ void nv50_disp_super(struct work_struct *);
+-int nv50_disp_sv_rescue(struct nvkm_disp *, u8 mode);
++int nv50_disp_sv_rescue(struct nvkm_disp *, u8 mode, u8 tag);
+ void nv50_disp_super_1(struct nvkm_disp *);
+ void nv50_disp_super_1_0(struct nvkm_disp *, struct nvkm_head *);
+ void nv50_disp_super_2_0(struct nvkm_disp *, struct nvkm_head *);
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/disp/nv50.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/disp/nv50.c
+@@ -1423,7 +1423,7 @@
+  * never completes.  Deliver exactly what the missing IRQ would have done
+  * (mirror of the intr1 0x70 block in nv50_disp_intr).  mode 0 logs only. */
+ int
+-nv50_disp_sv_rescue(struct nvkm_disp *disp, u8 mode)
++nv50_disp_sv_rescue(struct nvkm_disp *disp, u8 mode, u8 tag)
+ {
+ 	struct nvkm_subdev *subdev = &disp->engine.subdev;
+ 	struct nvkm_device *device = subdev->device;
+@@ -1437,6 +1437,20 @@
+ 	en2   = nvkm_rd32(device, 0x610028);
+ 	super = nvkm_rd32(device, 0x610030);
+ 
++	/* Patch 0019b: compact snapshot for the healthy-vs-wedged diff.  One line,
++	 * no sleeps, no writes.  Wedge reference (25.07.): super 0x150, pending
++	 * 0x20 (last delivered phase was SV2, so the sequence dies AFTER SV2);
++	 * healthy blanked super 0x140, healthy active 0x540.  What we need to know
++	 * is which phases a HEALTHY wake walks through. */
++	if (mode == 2) {
++		nvkm_warn(subdev, "sv-snap[%s]: super %08x pending %08x intr1 %08x "
++			  "busy %d core-ctrl %08x\n", tag ? "post" : "pre",
++			  super, disp->super.pending, intr1,
++			  work_busy(&disp->super.work),
++			  nvkm_rd32(device, 0x610200));
++		return 0;
++	}
++
+ 	nvkm_error(subdev, "sv-rescue probe: intr0 %08x intr1 %08x en %08x/%08x"
+ 		   " super %08x pending %08x busy %d\n", intr0, intr1, en, en2,
+ 		   super, disp->super.pending, work_busy(&disp->super.work));
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+@@ -2190,6 +2190,7 @@
+ 	struct nv50_core *core = disp->core;
+ 	struct nv50_outp_atom *outp;
+ 	struct nv50_mstm *mstm;
++	bool snap;
+ 	int i;
+ 
+ 	NV_ATOMIC(drm, "commit core %08x\n", interlock[NV50_DISP_INTERLOCK_BASE]);
+@@ -2200,6 +2201,20 @@
+ 			nv50_mstm_prepare(state, mst_state, mstm);
+ 	}
+ 
++	/* Patch 0019b: snapshot the supervisor state around every core update so a
++	 * HEALTHY wake can be diffed against the wedge (super 0x150 / pending 0x20).
++	 * Log only, rate limited, no writes. */
++	{
++		static unsigned long sv_snap_next;
++
++		snap = nouveau_sv_rescue >= 1 &&
++		       time_after_eq(jiffies, READ_ONCE(sv_snap_next));
++		if (snap) {
++			WRITE_ONCE(sv_snap_next, jiffies + HZ / 2);
++			(void)nv50_dmac_sv_kick(&disp->core->chan, 2, 0);
++		}
++	}
++
+ 	core->func->ntfy_init(disp->sync, NV50_DISP_CORE_NTFY);
+ 	core->func->update(core, interlock, true);
+ 	/* Patch 0019: staged core-ntfy wait with SV-rescue.  Poll budget stays
+@@ -2219,7 +2234,7 @@
+ 						    delay)) {
+ 				/* stage 2 = diagnose-armed (probe only), 3 = armed */
+ 				int r = nv50_dmac_sv_kick(&disp->core->chan,
+-						nouveau_sv_rescue >= 3 ? 1 : 0);
++						nouveau_sv_rescue >= 3 ? 1 : 0, 0);
+ 				NV_ERROR(drm, "sv-rescue: core ntfy pending after "
+ 					 "%u ms, kick=%d\n", delay, r);
+ 				timedout = core507d_ntfy_poll_done(disp->sync,
+@@ -2244,8 +2259,10 @@
+ 			       nouveau_bo_rd32(disp->sync, NV50_DISP_CORE_NTFY / 4));
+ 			nv50_dmac_forensics(&disp->core->chan, "core");
+ 			if (nouveau_sv_rescue >= 1)
+-				(void)nv50_dmac_sv_kick(&disp->core->chan, 0);
++				(void)nv50_dmac_sv_kick(&disp->core->chan, 0, 0);
+ 		}
++		if (snap)
++			(void)nv50_dmac_sv_kick(&disp->core->chan, 2, 1);
+ 	}
+ 
+ 	for_each_new_mst_mgr_in_state(state, mgr, mst_state, i) {
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.h
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.h
+@@ -117,7 +117,7 @@
+ void nv50_dmac_destroy(struct nv50_dmac *);
+ 
+ int  nv50_dmac_recover(struct nv50_dmac *);
+-int  nv50_dmac_sv_kick(struct nv50_dmac *, u8 mode);
++int  nv50_dmac_sv_kick(struct nv50_dmac *, u8 mode, u8 tag);
+ void nv50_disp_recover_schedule(struct nv50_dmac *);
+ void nv50_disp_recover_work(struct work_struct *);
+ 
+--- a/drivers/gpu/drm/nouveau/dispnv50/recover.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/recover.c
+@@ -11,11 +11,11 @@
+  */
+ /* Patch 0019: ask nvkm to synthesise the missing SV1 handshake. */
+ int
+-nv50_dmac_sv_kick(struct nv50_dmac *dmac, u8 mode)
++nv50_dmac_sv_kick(struct nv50_dmac *dmac, u8 mode, u8 tag)
+ {
+ 	struct {
+ 		struct nvif_disp_chan_sv_kick_v0 v0;
+-	} args = { .v0.version = 0, .v0.mode = mode };
++	} args = { .v0.version = 0, .v0.mode = mode, .v0.tag = tag };
+ 
+ 	return nvif_object_mthd(&dmac->base.user, NVIF_DISP_CHAN_V0_SV_KICK,
+ 				&args, sizeof(args));

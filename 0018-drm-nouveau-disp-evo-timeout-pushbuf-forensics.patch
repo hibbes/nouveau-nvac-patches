@@ -1,0 +1,140 @@
+From: Marek Czernohous <mczernohous@gmail.com>
+Date: Mon, 20 Jul 2026 17:05:00 +0200
+Subject: [PATCH] drm/nouveau/disp: dump EVO push buffer on channel timeout (forensics)
+
+The NVAC/MCP79 EVO fetch engine parks mid-stream (ctrl bit31 latched, GET
+frozen behind PUT, no exception in intr0).  Register sampling shows WHERE
+GET froze but not WHICH method the engine died on -- the one datum needed
+to design a real fix.  On any channel timeout (ring wait, wind, core
+notifier, window flush) dump the push-buffer words around the frozen GET
+pointer plus the tail below PUT to the kernel log.  Read-only, rate
+limited to one dump per channel per 10s, no behaviour change.
+
+Applies on top of 0011/0015/0016/0017 (soft-dpms stack).
+---
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.h
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.h
+@@ -85,6 +85,9 @@
+ 	u32 cur;
+ 	u32 put;
+ 	u32 max;
++
++	/* patch 0018: rate limit for the fetch-park push-buffer forensics dump */
++	unsigned long forensics_next;
+ };
+ 
+ struct nv50_outp_atom {
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+@@ -167,6 +167,57 @@
+ 	return dmac->max - dmac->cur;
+ }
+ 
++/* EVO fetch-park forensics (patch 0018).  The MCP79 fetch engine parks
++ * mid-stream with no exception latched (intr0 clean); the one datum the
++ * BAR0 register observatory cannot see is WHICH method the engine died on.
++ * On any channel timeout, dump the push-buffer words around the frozen GET
++ * pointer (plus the tail just below PUT) to the kernel log for offline
++ * decode.  Read-only, rate-limited per channel, no behaviour change.
++ */
++static void
++nv50_dmac_forensics_window(struct nv50_dmac *dmac, const char *who,
++			   const char *tag, u32 start, u32 end)
++{
++	u32 *ring = dmac->push.mem.object.map.ptr;
++	u32 w, i, e;
++	char line[96];
++	int n;
++
++	for (w = start & ~7u; w < end; w += 8) {
++		e = min_t(u32, w + 8, end);
++		n = scnprintf(line, sizeof(line), "%03x:", w);
++		for (i = w; i < e; i++)
++			n += scnprintf(line + n, sizeof(line) - n, " %08x",
++				       READ_ONCE(ring[i]));
++		pr_err("nouveau: evo-pushbuf %s %s %s\n", who, tag, line);
++	}
++}
++
++static void
++nv50_dmac_forensics(struct nv50_dmac *dmac, const char *who)
++{
++	u32 get, put, g0, g1, p0;
++
++	if (!dmac->push.mem.object.map.ptr ||
++	    time_before(jiffies, dmac->forensics_next))
++		return;
++	dmac->forensics_next = jiffies + 10 * HZ;
++
++	get = NVIF_RV32(&dmac->base.user, NV507C, GET, PTR);
++	put = NVIF_RV32(&dmac->base.user, NV507C, PUT, PTR);
++	pr_err("nouveau: evo-forensics %s: get=%03x put=%03x cur=%03x put_shadow=%03x max=%03x (u32 idx)\n",
++	       who, get, put, dmac->cur, dmac->put, dmac->max);
++
++	g0 = (get > 16) ? get - 16 : 0;
++	g1 = min_t(u32, get + 24, 0x1000 / 4);
++	nv50_dmac_forensics_window(dmac, who, "get", g0, g1);
++
++	p0 = (put > 24) ? put - 24 : 0;
++	if (p0 >= g1 || put <= g0)
++		nv50_dmac_forensics_window(dmac, who, "put", p0,
++					   min_t(u32, put + 8, 0x1000 / 4));
++}
++
+ static int
+ nv50_dmac_wind(struct nv50_dmac *dmac)
+ {
+@@ -182,8 +233,10 @@
+ 		if (nvif_msec(dmac->base.device, 2000,
+ 			if (NVIF_TV32(&dmac->base.user, NV507C, GET, PTR, >, 0))
+ 				break;
+-		) < 0)
++		) < 0) {
++			nv50_dmac_forensics(dmac, "wind");
+ 			return -ETIMEDOUT;
++		}
+ 	}
+ 
+ 	PUSH_RSVD(&dmac->push, PUSH_JUMP(&dmac->push, 0));
+@@ -215,6 +268,7 @@
+ 		if ((free = nv50_dmac_free(dmac)) >= size)
+ 			break;
+ 	) < 0) {
++		nv50_dmac_forensics(dmac, "ring-wait");
+ 		if (nouveau_disp_recover)
+ 			nv50_disp_recover_schedule(dmac);
+ 		WARN_ON(1);
+@@ -281,6 +335,7 @@
+ 		return ret;
+ 
+ 	dmac->disp = nv50_disp(drm->dev);
++	dmac->forensics_next = jiffies;
+ 
+ 	if (syncbuf < 0)
+ 		return 0;
+@@ -2148,8 +2203,12 @@
+ 	core->func->ntfy_init(disp->sync, NV50_DISP_CORE_NTFY);
+ 	core->func->update(core, interlock, true);
+ 	if (core->func->ntfy_wait_done(disp->sync, NV50_DISP_CORE_NTFY,
+-				       disp->core->chan.base.device))
++				       disp->core->chan.base.device)) {
+ 		NV_ERROR(drm, "core notifier timeout\n");
++		pr_err("nouveau: evo-forensics core: ntfy dword=%08x\n",
++		       nouveau_bo_rd32(disp->sync, NV50_DISP_CORE_NTFY / 4));
++		nv50_dmac_forensics(&disp->core->chan, "core");
++	}
+ 
+ 	for_each_new_mst_mgr_in_state(state, mgr, mst_state, i) {
+ 		mstm = nv50_mstm(mgr);
+@@ -2616,8 +2675,10 @@
+ 		struct nv50_wndw_atom *asyw = nv50_wndw_atom(new_plane_state);
+ 		struct nv50_wndw *wndw = nv50_wndw(plane);
+ 		int ret = nv50_wndw_wait_armed(wndw, asyw);
+-		if (ret)
++		if (ret) {
+ 			NV_ERROR(drm, "%s: timeout\n", plane->name);
++			nv50_dmac_forensics(&wndw->wndw, plane->name);
++		}
+ 	}
+ 
+ 	for_each_new_crtc_in_state(state, crtc, new_crtc_state, i) {

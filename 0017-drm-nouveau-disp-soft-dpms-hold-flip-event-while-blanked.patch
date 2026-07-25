@@ -1,0 +1,269 @@
+From: Marek Czernohous <marek@czernohous.de>
+Date: 2026-07-12
+Subject: [PATCH] drm/nouveau/disp: soft-DPMS hold the flip event while blanked (NVAC/MCP79)
+
+Patch 0015 suppresses background base-channel repaints while a soft_dpms head
+is latched blanked, by forcing the plane back to its armed framebuffer in
+nv50_disp_atomic_check (set.mask stays 0, so no base traffic and the fetch
+engine is never parked).  That part works: 23 of 24 blank cycles over 128h of
+uptime were clean, including a 20 hour blank.
+
+But the commit tail still completed the per-crtc flip event for those
+neutralised updates.  No flip ever reached the hardware, so this lies to
+userspace: by DRM semantics a completed flip event means the previously scanned
+framebuffer has been released.  The compositor therefore recycles that buffer
+and renders into it -- while it is still the armed scanout framebuffer and thus
+still pinned.  ttm_bo_validate() then rejects it:
+
+	/* Moving of pinned BOs is forbidden */
+	if (bo->pin_count)
+		return -EINVAL;
+
+which surfaces as:
+
+	nouveau 0000:02:00.0: labwc[4376]: fail ttm_validate
+	nouveau 0000:02:00.0: labwc[4376]: validating bo list
+	nouveau 0000:02:00.0: labwc[4376]: validate: -22
+
+Measured on a live system: 7 of 26 wakes hit this, and *every* validate reject
+in the whole boot sat within 3s of a blank release -- none anywhere else.  The
+user-visible effect is a stale, corrupted display after wake that a compositor
+repaint cannot fix (the buffer is rejected); only restarting the client that
+owns the poisoned buffer (e.g. swaybg) recovers it.
+
+Fix the lie rather than the plane suppression: if the check neutralised the
+update, hold the flip event back and deliver it from the wake bridge.  The
+compositor then simply waits and stops repainting while blanked, which is the
+desired behaviour anyway (it also stops it from burning power rendering frames
+that are thrown away).  A new per-commit flag (asyh->soft_dpms_suppressed) marks
+the neutralised commits so genuine commits, including the DPMS-off itself, are
+untouched.
+
+Holding the event means no further commit arrives, which would strand the
+existing stale-latch failsafe in nv50_disp_atomic_check (it can only run on a
+commit).  A delayed_work takes over that job, armed from the same
+soft_dpms_blank_timeout_ms parameter (default 0 = off, behaviour unchanged).
+When enabled it releases the latch and delivers the event, so a broken wake hook
+cannot freeze the display forever; the trade-off is that suppression then ends
+for the rest of that blank.
+
+Holding a drm_pending_vblank_event across the blank is safe if the DRM file goes
+away: drm_events_release() clears e->file_priv for events still on the pending
+list, and drm_send_event_locked() then just frees it.
+
+Depends on patches 0011 and 0015.  NVAC/MCP79 only, gated behind soft_dpms_blank.
+
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+Assisted-by: Claude Fable 5
+---
+diff -u -r a/drivers/gpu/drm/nouveau/dispnv50/atom.h b/drivers/gpu/drm/nouveau/dispnv50/atom.h
+--- a/drivers/gpu/drm/nouveau/dispnv50/atom.h	2026-07-12 01:03:24.690704354 +0200
++++ b/drivers/gpu/drm/nouveau/dispnv50/atom.h	2026-07-12 01:03:24.734771664 +0200
+@@ -152,6 +152,12 @@
+ 	 * blank.  _off drives the DP sink to D3, _on retrains it to D0. */
+ 	bool soft_dpms_off:1;
+ 	bool soft_dpms_on:1;
++
++	/* soft-DPMS blank-suppression (patch 0017): set by nv50_disp_atomic_check
++	 * when it neutralised a plane update on this head because the head is
++	 * latched blanked.  The commit tail reads it to hold the flip event back:
++	 * no flip reached the hardware, so signalling one would lie to userspace. */
++	bool soft_dpms_suppressed:1;
+ };
+ 
+ static inline struct nv50_head_atom *
+diff -u -r a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c	2026-07-12 01:03:24.660354070 +0200
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c	2026-07-12 01:03:24.744046384 +0200
+@@ -2282,6 +2282,59 @@
+ static struct nv50_head *nv50_soft_dpms_wake_head;
+ static bool nv50_soft_dpms_any_asleep;
+ 
++/* Deliver a flip event that was held back while the head was latched blanked
++ * (patch 0017).  drm_crtc_send_vblank_event() must be called under
++ * dev->event_lock.  Safe even if the DRM file went away in the meantime:
++ * drm_events_release() clears e->file_priv, and drm_send_event_locked() then
++ * simply frees the event. */
++static void
++nv50_soft_dpms_send_held_event(struct nv50_head *head)
++{
++	struct drm_crtc *crtc = &head->base.base;
++	struct drm_pending_vblank_event *e;
++	unsigned long flags;
++
++	spin_lock_irqsave(&crtc->dev->event_lock, flags);
++	e = head->soft_dpms_event;
++	head->soft_dpms_event = NULL;
++	if (e)
++		drm_crtc_send_vblank_event(crtc, e);
++	spin_unlock_irqrestore(&crtc->dev->event_lock, flags);
++}
++
++/* Stale-latch failsafe (patch 0017).  Holding the flip event stops the
++ * compositor from committing, so the jiffies-based stale-latch check inside
++ * nv50_disp_atomic_check can never run again -- this timer takes over: release
++ * the latch and deliver the event so a missed wake hook cannot freeze the
++ * display forever.  Armed only when soft_dpms_blank_timeout_ms != 0 (default
++ * 0 = off, i.e. behaviour unchanged).  Trade-off when enabled: once it fires,
++ * suppression is over for the rest of the blank, so a background repaint can
++ * again park the base fetch engine.  Keep the timeout generous. */
++static void
++nv50_soft_dpms_blank_timeout_work_fn(struct work_struct *work)
++{
++	struct nv50_head *head = container_of(to_delayed_work(work),
++					      struct nv50_head,
++					      soft_dpms_blank_timeout_work);
++
++	mutex_lock(&nv50_soft_dpms_wake_lock);
++	if (nv50_soft_dpms_wake_head == head)
++		nv50_soft_dpms_wake_head = NULL;
++	WRITE_ONCE(head->soft_dpms_asleep, false);
++	WRITE_ONCE(nv50_soft_dpms_any_asleep, false);
++	mutex_unlock(&nv50_soft_dpms_wake_lock);
++
++	nv50_soft_dpms_send_held_event(head);
++	pr_warn("nouveau: soft-dpms: wake missed, blank-suppression released by failsafe\n");
++}
++
++void
++nv50_soft_dpms_head_init(struct nv50_head *head)
++{
++	INIT_DELAYED_WORK(&head->soft_dpms_blank_timeout_work,
++			  nv50_soft_dpms_blank_timeout_work_fn);
++}
++
+ static int
+ nv50_soft_dpms_wake_set(const char *val, const struct kernel_param *kp)
+ {
+@@ -2298,6 +2351,14 @@
+ 	WRITE_ONCE(nv50_soft_dpms_any_asleep, false);
+ 	mutex_unlock(&nv50_soft_dpms_wake_lock);
+ 
++	/* patch 0017: the wake arrived -- cancel the failsafe and hand the
++	 * compositor the flip event we held back while blanked, so it resumes
++	 * repainting with a correct view of which buffers it owns. */
++	if (head) {
++		cancel_delayed_work(&head->soft_dpms_blank_timeout_work);
++		nv50_soft_dpms_send_held_event(head);
++	}
++
+ 	pr_info("nouveau: soft-dpms: blank-suppression released (wake bridge)\n");
+ 	return 0;
+ }
+@@ -2560,6 +2621,52 @@
+ 	}
+ 
+ 	for_each_new_crtc_in_state(state, crtc, new_crtc_state, i) {
++		struct nv50_head *nvh = nv50_head(crtc);
++
++		/* soft-DPMS blank-suppression flip-event hold (patch 0017): the check
++		 * neutralised this update because the head is latched blanked, so no
++		 * flip reached the hardware.  Completing the event would tell the
++		 * compositor its previous buffer is free; it would recycle that buffer
++		 * and render into the framebuffer that is STILL pinned for scanout ->
++		 * ttm_bo_validate() -> -EINVAL.  Hold the event instead: the compositor
++		 * waits and stops repainting while blanked (which is what we want), and
++		 * the wake bridge delivers it.  Drop the vblank reference taken earlier
++		 * -- we are not waiting on a flip we never programmed. */
++		if (nouveau_soft_dpms && nouveau_soft_dpms_blank &&
++		    new_crtc_state->event &&
++		    nv50_head_atom(new_crtc_state)->soft_dpms_suppressed &&
++		    READ_ONCE(nvh->soft_dpms_asleep)) {
++			unsigned int tmo = READ_ONCE(nouveau_soft_dpms_blank_timeout_ms);
++			unsigned long flags;
++			bool held = false;
++
++			spin_lock_irqsave(&crtc->dev->event_lock, flags);
++			if (!nvh->soft_dpms_event) {
++				nvh->soft_dpms_event = new_crtc_state->event;
++				held = true;
++			}
++			spin_unlock_irqrestore(&crtc->dev->event_lock, flags);
++
++			if (held) {
++				new_crtc_state->event = NULL;
++				if (new_crtc_state->active)
++					drm_crtc_vblank_put(crtc);
++				if (tmo)
++					mod_delayed_work(system_wq,
++							 &nvh->soft_dpms_blank_timeout_work,
++							 msecs_to_jiffies(tmo));
++				continue;
++			}
++			/* One is already held (a compositor that did not wait for it):
++			 * fall through and complete this one normally rather than leak. */
++		}
++
++		/* Suppression ended (wake, modeset exemption or failsafe) while an
++		 * event was still held: deliver it now so nobody waits forever. */
++		if (READ_ONCE(nvh->soft_dpms_event) &&
++		    !READ_ONCE(nvh->soft_dpms_asleep))
++			nv50_soft_dpms_send_held_event(nvh);
++
+ 		if (new_crtc_state->event) {
+ 			unsigned long flags;
+ 			/* Get correct count/ts if racing with vblank irq */
+@@ -2893,6 +3000,12 @@
+ 			new_plane_state->src_y  = armed->src_y;
+ 			new_plane_state->src_w  = armed->src_w;
+ 			new_plane_state->src_h  = armed->src_h;
++
++			/* patch 0017: tell the commit tail that this update was
++			 * neutralised, so it holds the flip event back instead of
++			 * signalling a flip that never happened. */
++			if (pcs)
++				nv50_head_atom(pcs)->soft_dpms_suppressed = true;
+ 		}
+ 	}
+ 
+diff -u -r a/drivers/gpu/drm/nouveau/dispnv50/head.c b/drivers/gpu/drm/nouveau/dispnv50/head.c
+--- a/drivers/gpu/drm/nouveau/dispnv50/head.c	2026-07-12 01:03:24.679764924 +0200
++++ b/drivers/gpu/drm/nouveau/dispnv50/head.c	2026-07-12 01:03:24.736133783 +0200
+@@ -494,6 +494,9 @@
+ 	 * reads them indeterminate. */
+ 	asyh->soft_dpms_off = false;
+ 	asyh->soft_dpms_on  = false;
++	/* patch 0017: per-commit too -- a stale bit here would hold a flip event
++	 * back on a commit that was never suppressed. */
++	asyh->soft_dpms_suppressed = false;
+ 	return &asyh->state;
+ }
+ 
+@@ -590,6 +593,7 @@
+ 	head->func = disp->core->func->head;
+ 	head->disp = disp;
+ 	head->base.index = index;
++	nv50_soft_dpms_head_init(head);
+ 
+ 	if (disp->disp->object.oclass < GF110_DISP)
+ 		funcs = &nv50_head_func;
+diff -u -r a/drivers/gpu/drm/nouveau/dispnv50/head.h b/drivers/gpu/drm/nouveau/dispnv50/head.h
+--- a/drivers/gpu/drm/nouveau/dispnv50/head.h	2026-07-12 01:03:24.684680296 +0200
++++ b/drivers/gpu/drm/nouveau/dispnv50/head.h	2026-07-12 01:03:24.735221531 +0200
+@@ -30,8 +30,26 @@
+ 	 * stamps the latch time so a missed wake cannot suppress forever. */
+ 	bool soft_dpms_asleep;
+ 	unsigned long soft_dpms_blank_jiffies;
++
++	/* soft-DPMS blank-suppression flip-event hold (patch 0017).  While the head
++	 * is latched blanked the check neutralises plane updates, so no flip reaches
++	 * the hardware.  Completing the flip event anyway makes the compositor
++	 * believe its previous buffer was released; it recycles that buffer and
++	 * renders into the framebuffer that is STILL pinned for scanout, which
++	 * ttm_bo_validate() rejects with -EINVAL ("Moving of pinned BOs is
++	 * forbidden").  Hold the event here instead and deliver it on wake.
++	 * Serialised by dev->event_lock.
++	 *
++	 * blank_timeout_work is the matching failsafe: with an event held the
++	 * compositor stops committing, so the stale-latch check inside
++	 * nv50_disp_atomic_check can never run again.  The timer takes over that
++	 * job.  Armed only when soft_dpms_blank_timeout_ms != 0 (default 0 = off). */
++	struct drm_pending_vblank_event *soft_dpms_event;
++	struct delayed_work soft_dpms_blank_timeout_work;
+ };
+ 
++void nv50_soft_dpms_head_init(struct nv50_head *head);
++
+ struct nv50_head *nv50_head_create(struct drm_device *, int index);
+ void nv50_head_flush_set(struct nv50_head *head, struct nv50_head_atom *asyh);
+ void nv50_head_flush_set_wndw(struct nv50_head *head, struct nv50_head_atom *asyh);

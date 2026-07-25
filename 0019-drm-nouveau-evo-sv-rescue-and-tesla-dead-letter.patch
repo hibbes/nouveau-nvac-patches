@@ -1,0 +1,443 @@
+From: Marek Czernohous <mczernohous@gmail.com>
+Date: Sat, 25 Jul 2026 13:30:00 +0200
+Subject: [PATCH] drm/nouveau: MCP79 EVO SV-rescue (0019) + Tesla channel-kill dead-letter fix (0020a/b)
+
+Rev 2 (post adversarial review). Two independent, source-verified fixes for the aging
+NVAC/MCP79, additive on the 0011-0018 soft-dpms stack, each gated by a runtime module
+parameter. Review fixes folded in: 0019 armed path now finalises the synthesized SV1
+under disp->super.mutex (serialises vs the supervisor worker); a diagnose-armed stage
+(sv_rescue=2, probe at trigger, no write) precedes the armed stage (3); 0020a moves the
+kill-event unsubscribe before the fence-context teardown (closes a narrow killed-event
+UAF window newly reachable on Tesla); mode>1 rejected. 0020b (disp_fence_timeout_ms)
+unchanged, review-clean. Combining chan_kill_event=0 disp_fence_timeout_ms=0 sv_rescue=0
+restores prior behaviour without a rebuild.
+---
+--- a/drivers/gpu/drm/nouveau/nouveau_drv.h
++++ b/drivers/gpu/drm/nouveau/nouveau_drv.h
+@@ -367,6 +367,9 @@
+ 
+ extern int nouveau_modeset;
+ 
++/* Patch 0020a: subscribe channel-kill events on NV50/Tesla too (dead-letter fix). */
++extern unsigned int nouveau_chan_kill_event;
++
+ /*XXX: Don't use these in new code.
+  *
+  * These accessors are used in a few places (mostly older code paths)
+--- a/drivers/gpu/drm/nouveau/nouveau_drm.c
++++ b/drivers/gpu/drm/nouveau/nouveau_drm.c
+@@ -132,6 +132,26 @@
+ unsigned int nouveau_disp_recover = 0;
+ module_param_named(disp_recover, nouveau_disp_recover, uint, 0400);
+ 
++MODULE_PARM_DESC(chan_kill_event, "subscribe channel-kill notification on pre-Fermi "
++	"channels too (default 1; 0 = legacy Fermi+ only)");
++unsigned int nouveau_chan_kill_event = 1;
++module_param_named(chan_kill_event, nouveau_chan_kill_event, uint, 0400);
++
++MODULE_PARM_DESC(disp_fence_timeout_ms, "max wait for plane fences in the nonblocking "
++	"commit tail before flipping anyway (default 10000; 0 = wait forever like upstream)");
++unsigned int nouveau_disp_fence_timeout_ms = 10000;
++module_param_named(disp_fence_timeout_ms, nouveau_disp_fence_timeout_ms, uint, 0400);
++
++MODULE_PARM_DESC(sv_rescue, "EVO supervisor-handshake rescue "
++	"(0=off, 1=diagnose-only, 2=diagnose-armed probe, 3=armed; default 1)");
++unsigned int nouveau_sv_rescue = 1;
++module_param_named(sv_rescue, nouveau_sv_rescue, uint, 0644);
++
++MODULE_PARM_DESC(sv_rescue_delay_ms, "ms without core-ntfy DONE before the "
++	"rescue attempt (default 150)");
++unsigned int nouveau_sv_rescue_delay_ms = 150;
++module_param_named(sv_rescue_delay_ms, nouveau_sv_rescue_delay_ms, uint, 0644);
++
+ MODULE_PARM_DESC(soft_dpms, "NVAC/MCP79: keep head+core armed across a pure DPMS off/on so the EVO-core-wedging full re-program is never emitted (default: 0 = off)");
+ unsigned int nouveau_soft_dpms = 0;
+ module_param_named(soft_dpms, nouveau_soft_dpms, uint, 0644);
+--- a/drivers/gpu/drm/nouveau/nouveau_chan.c
++++ b/drivers/gpu/drm/nouveau/nouveau_chan.c
+@@ -90,6 +90,10 @@
+ {
+ 	struct nouveau_channel *chan = *pchan;
+ 	if (chan) {
++		/* Patch 0020a fix: drop the kill-event subscription before the
++		 * fence context so a late killed-event cannot read a freed fctx. */
++		nvif_event_dtor(&chan->kill);
++
+ 		if (chan->fence)
+ 			nouveau_fence(chan->cli->drm)->context_del(chan);
+ 
+@@ -100,7 +104,6 @@
+ 		nvif_object_dtor(&chan->nvsw);
+ 		nvif_object_dtor(&chan->gart);
+ 		nvif_object_dtor(&chan->vram);
+-		nvif_event_dtor(&chan->kill);
+ 		nvif_object_dtor(&chan->user);
+ 		nvif_mem_dtor(&chan->mem_userd);
+ 		nouveau_vma_del(&chan->sema.vma);
+@@ -363,7 +366,14 @@
+ 	if (ret)
+ 		return ret;
+ 
+-	if (chan->user.oclass >= FERMI_CHANNEL_GPFIFO) {
++	/* Patch 0020a: subscribe channel-killed events on NV50+ (Tesla) too, not
++	 * only Fermi+.  Without a subscriber the nvkm ERRORED event (fifo/chan.c)
++	 * is a dead letter, nouveau_fence_context_kill() never runs, and the
++	 * killed channel's fences never signal: display commits (disp.c) and TTM
++	 * then wait forever (dma-fence contract violation).  Runtime escape:
++	 * nouveau.chan_kill_event=0 restores the legacy Fermi+-only behaviour. */
++	if (chan->user.oclass >= (nouveau_chan_kill_event ?
++				  NV50_CHANNEL_GPFIFO : FERMI_CHANNEL_GPFIFO)) {
+ 		DEFINE_RAW_FLEX(struct nvif_event_v0, args, data,
+ 				sizeof(struct nvif_chan_event_v0));
+ 		struct nvif_chan_event_v0 *host =
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+@@ -2202,12 +2202,50 @@
+ 
+ 	core->func->ntfy_init(disp->sync, NV50_DISP_CORE_NTFY);
+ 	core->func->update(core, interlock, true);
+-	if (core->func->ntfy_wait_done(disp->sync, NV50_DISP_CORE_NTFY,
+-				       disp->core->chan.base.device)) {
+-		NV_ERROR(drm, "core notifier timeout\n");
+-		pr_err("nouveau: evo-forensics core: ntfy dword=%08x\n",
+-		       nouveau_bo_rd32(disp->sync, NV50_DISP_CORE_NTFY / 4));
+-		nv50_dmac_forensics(&disp->core->chan, "core");
++	/* Patch 0019: staged core-ntfy wait with SV-rescue.  Poll budget stays
++	 * 2000 ms (a diagnostic kick adds a few ms of sleeps in the failure path);
++	 * after sv_rescue_delay_ms without DONE, synthesise the missing
++	 * SV1 supervisor handshake nvkm-side (nv50_disp_sv_rescue). */
++	{
++		bool timedout;
++
++		if (nouveau_sv_rescue >= 2 &&
++		    core->func->ntfy_wait_done == core507d_ntfy_wait_done) {
++			u32 delay = clamp_t(u32,
++				READ_ONCE(nouveau_sv_rescue_delay_ms), 20, 1900);
++
++			if (core507d_ntfy_poll_done(disp->sync, NV50_DISP_CORE_NTFY,
++						    disp->core->chan.base.device,
++						    delay)) {
++				/* stage 2 = diagnose-armed (probe only), 3 = armed */
++				int r = nv50_dmac_sv_kick(&disp->core->chan,
++						nouveau_sv_rescue >= 3 ? 1 : 0);
++				NV_ERROR(drm, "sv-rescue: core ntfy pending after "
++					 "%u ms, kick=%d\n", delay, r);
++				timedout = core507d_ntfy_poll_done(disp->sync,
++						NV50_DISP_CORE_NTFY,
++						disp->core->chan.base.device,
++						2000 - delay) != 0;
++				if (!timedout && r == 0)
++					NV_ERROR(drm, "sv-rescue: core update "
++						 "completed after synthesized SV1\n");
++			} else {
++				timedout = false;
++			}
++		} else {
++			timedout = core->func->ntfy_wait_done(disp->sync,
++					NV50_DISP_CORE_NTFY,
++					disp->core->chan.base.device) != 0;
++		}
++
++		if (timedout) {
++			NV_ERROR(drm, "core notifier timeout\n");
++			pr_err("nouveau: evo-forensics core: ntfy dword=%08x\n",
++			       nouveau_bo_rd32(disp->sync, NV50_DISP_CORE_NTFY / 4));
++			nv50_dmac_forensics(&disp->core->chan, "core");
++			if (nouveau_sv_rescue >= 1)
++				(void)nv50_dmac_sv_kick(&disp->core->chan, 0);
++		}
+ 	}
+ 
+ 	for_each_new_mst_mgr_in_state(state, mgr, mst_state, i) {
+@@ -2431,6 +2469,43 @@
+ MODULE_PARM_DESC(soft_dpms_wake,
+ 	"NVAC/MCP79: write to release soft_dpms blank-suppression on wake (pair with swayidle resume)");
+ 
++/* Patch 0020b: failsafe timeout for the nonblocking commit-tail fence wait.
++ * drm_atomic_helper_wait_for_fences(..., false) waits uninterruptible and
++ * without timeout; a killed channel whose fences never signal (see 0020a)
++ * would hang the commit worker forever.  Bound the wait, then flip anyway
++ * and loudly warn.  timeout 0 = exact upstream behaviour. */
++static void
++nv50_disp_atomic_wait_for_fences(struct drm_device *dev,
++				 struct drm_atomic_state *state)
++{
++	struct nouveau_drm *drm = nouveau_drm(dev);
++	struct drm_plane_state *new_plane_state;
++	struct drm_plane *plane;
++	long ret;
++	int i;
++
++	if (!nouveau_disp_fence_timeout_ms) {
++		drm_atomic_helper_wait_for_fences(dev, state, false);
++		return;
++	}
++
++	for_each_new_plane_in_state(state, plane, new_plane_state, i) {
++		if (!new_plane_state->fence)
++			continue;
++		WARN_ON(!new_plane_state->fb);
++		ret = dma_fence_wait_timeout(new_plane_state->fence, false,
++			msecs_to_jiffies(nouveau_disp_fence_timeout_ms));
++		if (ret <= 0)
++			NV_WARN(drm, "plane %s: fence %llu:%llu wait %s (%ld), "
++				"flipping anyway; unsignalled-fence leak, please report\n",
++				plane->name, new_plane_state->fence->context,
++				(u64)new_plane_state->fence->seqno,
++				ret ? "failed" : "timed out", ret);
++		dma_fence_put(new_plane_state->fence);
++		new_plane_state->fence = NULL;
++	}
++}
++
+ static void
+ nv50_disp_atomic_commit_tail(struct drm_atomic_state *state)
+ {
+@@ -2450,7 +2525,7 @@
+ 
+ 	NV_ATOMIC(drm, "commit %d %d\n", atom->lock_core, atom->flush_disable);
+ 	nv50_crc_atomic_stop_reporting(state);
+-	drm_atomic_helper_wait_for_fences(dev, state, false);
++	nv50_disp_atomic_wait_for_fences(dev, state);
+ 	drm_atomic_helper_wait_for_dependencies(state);
+ 	drm_dp_mst_atomic_wait_for_dependencies(state);
+ 	drm_atomic_helper_update_legacy_modeset_state(dev, state);
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.h
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.h
+@@ -8,6 +8,11 @@
+ 
+ extern unsigned int nouveau_disp_recover;
+ extern unsigned int nouveau_soft_dpms;
++/* Patch 0020b: nonblocking commit-tail fence-wait failsafe timeout (ms). */
++extern unsigned int nouveau_disp_fence_timeout_ms;
++/* Patch 0019: EVO supervisor-handshake rescue knobs. */
++extern unsigned int nouveau_sv_rescue;
++extern unsigned int nouveau_sv_rescue_delay_ms;
+ extern unsigned int nouveau_soft_dpms_blank;
+ extern unsigned int nouveau_soft_dpms_blank_timeout_ms;
+ 
+@@ -112,6 +117,7 @@
+ void nv50_dmac_destroy(struct nv50_dmac *);
+ 
+ int  nv50_dmac_recover(struct nv50_dmac *);
++int  nv50_dmac_sv_kick(struct nv50_dmac *, u8 mode);
+ void nv50_disp_recover_schedule(struct nv50_dmac *);
+ void nv50_disp_recover_work(struct work_struct *);
+ 
+--- a/drivers/gpu/drm/nouveau/dispnv50/core507d.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/core507d.c
+@@ -58,11 +58,12 @@
+ 	return PUSH_KICK(push);
+ }
+ 
++/* Patch 0019: parametrised poll used by the staged SV-rescue wait. */
+ int
+-core507d_ntfy_wait_done(struct nouveau_bo *bo, u32 offset,
+-			struct nvif_device *device)
++core507d_ntfy_poll_done(struct nouveau_bo *bo, u32 offset,
++			struct nvif_device *device, u32 ms)
+ {
+-	s64 time = nvif_msec(device, 2000ULL,
++	s64 time = nvif_msec(device, (u64)ms,
+ 		if (NVBO_TD32(bo, offset, NV_DISP_CORE_NOTIFIER_1, COMPLETION_0, DONE, ==, TRUE))
+ 			break;
+ 		usleep_range(1, 2);
+@@ -70,6 +71,13 @@
+ 	return time < 0 ? time : 0;
+ }
+ 
++int
++core507d_ntfy_wait_done(struct nouveau_bo *bo, u32 offset,
++			struct nvif_device *device)
++{
++	return core507d_ntfy_poll_done(bo, offset, device, 2000);
++}
++
+ void
+ core507d_ntfy_init(struct nouveau_bo *bo, u32 offset)
+ {
+--- a/drivers/gpu/drm/nouveau/dispnv50/core.h
++++ b/drivers/gpu/drm/nouveau/dispnv50/core.h
+@@ -50,6 +50,7 @@
+ void core507d_ntfy_init(struct nouveau_bo *, u32);
+ int core507d_read_caps(struct nv50_disp *disp);
+ int core507d_caps_init(struct nouveau_drm *, struct nv50_disp *);
++int core507d_ntfy_poll_done(struct nouveau_bo *, u32, struct nvif_device *, u32);
+ int core507d_ntfy_wait_done(struct nouveau_bo *, u32, struct nvif_device *);
+ int core507d_update(struct nv50_core *, u32 *, bool);
+ 
+--- a/drivers/gpu/drm/nouveau/dispnv50/recover.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/recover.c
+@@ -9,6 +9,18 @@
+ /* Re-arm a wedged EVO channel via the nvkm recover method, then resync the
+  * client-side pushbuffer state to the freshly re-armed HW (PUT == 0).
+  */
++/* Patch 0019: ask nvkm to synthesise the missing SV1 handshake. */
++int
++nv50_dmac_sv_kick(struct nv50_dmac *dmac, u8 mode)
++{
++	struct {
++		struct nvif_disp_chan_sv_kick_v0 v0;
++	} args = { .v0.version = 0, .v0.mode = mode };
++
++	return nvif_object_mthd(&dmac->base.user, NVIF_DISP_CHAN_V0_SV_KICK,
++				&args, sizeof(args));
++}
++
+ int
+ nv50_dmac_recover(struct nv50_dmac *dmac)
+ {
+--- a/drivers/gpu/drm/nouveau/include/nvif/if0014.h
++++ b/drivers/gpu/drm/nouveau/include/nvif/if0014.h
+@@ -12,9 +12,17 @@
+ };
+ 
+ #define NVIF_DISP_CHAN_V0_RECOVER 0x00
++#define NVIF_DISP_CHAN_V0_SV_KICK 0x01
+ 
+ struct nvif_disp_chan_recover_v0 {
+ 	__u8  version;
+ 	__u8  pad01[7];
+ };
++
++/* Patch 0019: supervisor-handshake rescue kick (nv50 family). */
++struct nvif_disp_chan_sv_kick_v0 {
++	__u8  version;
++	__u8  mode;	/* 0 = probe (log only); 1 = rescue */
++	__u8  pad02[6];
++};
+ #endif
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/disp/chan.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/disp/chan.c
+@@ -203,6 +203,26 @@
+ 	return ret;
+ }
+ 
++/* Patch 0019: synthesise the missing SV1 supervisor handshake (nv50 only). */
++static int
++nvkm_disp_chan_mthd_sv_kick(struct nvkm_disp_chan *chan, void *argv, u32 argc)
++{
++	union {
++		struct nvif_disp_chan_sv_kick_v0 v0;
++	} *args = argv;
++	int ret = -ENOSYS;
++
++	if (!(ret = nvif_unpack(ret, &argv, &argc, args->v0, 0, 0, false))) {
++		if (args->v0.mode > 1)
++			return -EINVAL;
++		/* nv50-family only: register layout 0x610024/0x610030. */
++		if (chan->disp->func->super != nv50_disp_super)
++			return -ENODEV;
++		return nv50_disp_sv_rescue(chan->disp, args->v0.mode);
++	}
++	return ret;
++}
++
+ static int
+ nvkm_disp_chan_mthd(struct nvkm_object *object, u32 mthd, void *argv, u32 argc)
+ {
+@@ -211,6 +231,8 @@
+ 	switch (mthd) {
+ 	case NVIF_DISP_CHAN_V0_RECOVER:
+ 		return nvkm_disp_chan_mthd_recover(chan, argv, argc);
++	case NVIF_DISP_CHAN_V0_SV_KICK:
++		return nvkm_disp_chan_mthd_sv_kick(chan, argv, argc);
+ 	default:
+ 		return -EINVAL;
+ 	}
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/disp/priv.h
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/disp/priv.h
+@@ -52,6 +52,7 @@
+ void nv50_disp_intr(struct nvkm_disp *);
+ extern const struct nvkm_enum nv50_disp_intr_error_type[];
+ void nv50_disp_super(struct work_struct *);
++int nv50_disp_sv_rescue(struct nvkm_disp *, u8 mode);
+ void nv50_disp_super_1(struct nvkm_disp *);
+ void nv50_disp_super_1_0(struct nvkm_disp *, struct nvkm_head *);
+ void nv50_disp_super_2_0(struct nvkm_disp *, struct nvkm_head *);
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/disp/nv50.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/disp/nv50.c
+@@ -1415,6 +1415,83 @@
+ 	mutex_unlock(&disp->super.mutex);
+ }
+ 
++/* Patch 0019: supervisor-handshake rescue (MCP79 EVO-wedge prevention).
++ * Park signature (5/5 of all wedges): a core UPDATE is accepted (err tracker
++ * 0x080/0x200), 0x610030 carries the extra 0x010 bit over the base state, but
++ * intr1 (0x610024) never latches the SV1 bit; the worker never runs, the
++ * unconditional continue (0x610030 = 0x80000000) is never written, the UPDATE
++ * never completes.  Deliver exactly what the missing IRQ would have done
++ * (mirror of the intr1 0x70 block in nv50_disp_intr).  mode 0 logs only. */
++int
++nv50_disp_sv_rescue(struct nvkm_disp *disp, u8 mode)
++{
++	struct nvkm_subdev *subdev = &disp->engine.subdev;
++	struct nvkm_device *device = subdev->device;
++	struct nvkm_head *head;
++	u32 intr0, intr1, en, en2, super;
++	int i;
++
++	intr0 = nvkm_rd32(device, 0x610020);
++	intr1 = nvkm_rd32(device, 0x610024);
++	en    = nvkm_rd32(device, 0x61002c);
++	en2   = nvkm_rd32(device, 0x610028);
++	super = nvkm_rd32(device, 0x610030);
++
++	nvkm_error(subdev, "sv-rescue probe: intr0 %08x intr1 %08x en %08x/%08x"
++		   " super %08x pending %08x busy %d\n", intr0, intr1, en, en2,
++		   super, disp->super.pending, work_busy(&disp->super.work));
++	for (i = 0; i < 3; i++)		/* core, base-0, base-1 */
++		nvkm_error(subdev, "sv-rescue: ch%d err %08x/%08x ctrl %08x\n",
++			   i, nvkm_rd32(device, 0x610080 + i * 8),
++			      nvkm_rd32(device, 0x610084 + i * 8),
++			      nvkm_rd32(device, 0x610200 + i * 0x10));
++	list_for_each_entry(head, &disp->heads, head) {
++		u16 h0 = 0, v0 = 0, h1 = 0, v1 = 0;
++		if (!head->func->rgpos)
++			continue;
++		head->func->rgpos(head, &h0, &v0);
++		usleep_range(1000, 1500);
++		head->func->rgpos(head, &h1, &v1);
++		nvkm_error(subdev, "sv-rescue: head-%d rgpos %u,%u -> %u,%u\n",
++			   head->id, h0, v0, h1, v1);
++	}
++
++	if (mode == 0)
++		return 0;
++
++	/* Quad guard: never touch a live SV path. */
++	if (intr1 & 0x00000070)
++		return -EBUSY;		/* a real SV IRQ is latched */
++	if (work_busy(&disp->super.work))
++		return -EBUSY;		/* worker queued or running */
++	if (!(super & 0x00000010))
++		return -ENODATA;	/* no frozen SV1 request */
++	for (i = 0; i < 2; i++) {	/* persistence: signature must hold */
++		usleep_range(2000, 3000);
++		if ((nvkm_rd32(device, 0x610024) & 0x70) ||
++		    !(nvkm_rd32(device, 0x610030) & 0x10))
++			return -EBUSY;
++	}
++
++	nvkm_error(subdev, "sv-rescue: synthesizing SV1 (super %08x)\n", super);
++	/* Finalise under super.mutex: nv50_disp_super holds it for its whole run,
++	 * so a real supervisor pass cannot execute a wrong phase while we set
++	 * pending.  Recheck the guards once serialised. */
++	if (!mutex_trylock(&disp->super.mutex))
++		return -EBUSY;
++	if ((nvkm_rd32(device, 0x610024) & 0x00000070) ||
++	    work_busy(&disp->super.work) ||
++	    !(nvkm_rd32(device, 0x610030) & 0x00000010)) {
++		mutex_unlock(&disp->super.mutex);
++		return -EBUSY;
++	}
++	disp->super.pending = 0x00000010;
++	queue_work(disp->super.wq, &disp->super.work);
++	nvkm_wr32(device, 0x610024, 0x00000010);	/* W1C, no-op if never latched */
++	mutex_unlock(&disp->super.mutex);
++	return 0;
++}
++
+ const struct nvkm_enum
+ nv50_disp_intr_error_type[] = {
+ 	{ 0, "NONE" },
