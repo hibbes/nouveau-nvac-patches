@@ -24,6 +24,26 @@ mapping, it is not merely past a notional register range. On x86 the
 ioremap gets rounded up to page granularity so nothing faults in
 practice, which is presumably why this survived so long.
 
+## Hardware test, 2026-08-04
+
+Patch 0001 is no longer reasoning-only. The patched module was stripped,
+installed, reloaded (md5 of the active module checked against the installed
+one) and put through a real `rtcwake -m mem -s 30` deep S3 on the reference
+machine:
+
+    stock module,   first S3 of the boot (17:49):  2 UBSAN splats
+    patched module, second S3 (21:19:56 - 21:20:01): 0 UBSAN splats
+
+The network came back cleanly (`link up`, DHCP lease restored, ping 0% loss)
+and there were no `tx_timeout` events. The stock module was restored
+afterwards, so the fix is **not** installed permanently: the bashrc rebuild
+hook only builds `drivers/gpu/drm/nouveau` and would silently overwrite a
+patched forcedeth on the next kernel merge.
+
+Patch 0002 is still compile-and-reasoning only. Its code path sits behind the
+`debug_tx_timeout` module parameter and needs a genuine TX timeout to run,
+which cannot be forced safely.
+
 ## Before sending anything upstream
 
 - **Neither patch carries a `Fixes:` tag.** Both loops are long-standing
