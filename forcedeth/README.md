@@ -4,32 +4,51 @@ Not nouveau, but the same machine and the same silicon family: forcedeth
 drives the onboard NIC of the MCP79 chipset this repository targets.
 Patches here are kept separate from the numbered nouveau series and are
 not applied by `/etc/kernel/nouveau-patches` (the bashrc rebuild hook
-only builds `drivers/gpu/drm/nouveau`).
+only builds `drivers/gpu/drm/nouveau`, so a patch dropped in there would
+be applied to the source tree but never compiled or installed).
 
-| Patch | What |
-|---|---|
-| `0001-forcedeth-fix-off-by-one-when-saving-restoring-non-PCI-config-space.patch` | `<=` instead of `<` in the suspend/resume config-space loops, one element past `saved_config_space[]`. Found by UBSAN on 7.1.6 during a deep S3 cycle. |
+Both patches are generated against 7.1.6, apply cleanly on their own and
+cumulatively (`patch --dry-run`, 0 rejects), and are independent of each
+other: they touch different functions and neither changes the line count.
+
+| Patch | What | checkpatch |
+|---|---|---|
+| `0001-forcedeth-fix-off-by-one-when-saving-restoring-non-PCI-config-space.patch` | `<=` instead of `<` in the `nv_suspend()` / `nv_resume()` config-space loops. Indexes one element past `saved_config_space[]`, and on resume `writel()`s that value one dword past the window. Found by UBSAN on 7.1.6 during a deep S3 cycle. | 0 errors, 2 warnings, 2 checks |
+| `0002-forcedeth-stop-the-tx_timeout-register-dump-past-the-ioremap-window.patch` | `nv_tx_timeout()` dumps eight-dword rows but only bounds the row's *start*, so the final row reads 12 to 28 bytes past the window on every supported variant. | clean |
+
+## Why both matter more than "reads a bit too far"
+
+`np->base = ioremap(addr, np->register_size)` maps **exactly**
+`register_size` bytes. Every overrun described above therefore leaves the
+mapping, it is not merely past a notional register range. On x86 the
+ioremap gets rounded up to page granularity so nothing faults in
+practice, which is presumably why this survived so long.
 
 ## Before sending anything upstream
 
-- **No `Fixes:` tag yet.** The loop is long-standing mainline code and this box
-  has no kernel git history (gentoo-sources ships a tarball), so the introducing
-  commit could not be determined locally. `checkpatch` asks for the tag because
-  the message carries a `Call Trace:`. Determine it against a real kernel clone
-  before posting, rather than guessing a hash.
-- **checkpatch: 0 errors, 2 warnings, 2 checks.** The two CHECKs are
-  "spaces preferred around that '/'" on the touched lines. That spacing is
-  pre-existing style and matches the identical loop in `nv_get_regs()`
-  (forcedeth.c:4588), so it was left alone to keep the fix minimal. Expect a
-  reviewer to possibly ask for it anyway.
+- **Neither patch carries a `Fixes:` tag.** Both loops are long-standing
+  mainline code and this box has no kernel git history (gentoo-sources
+  ships a tarball), so the introducing commits could not be determined
+  locally. `checkpatch` explicitly asks for one on 0001 because that
+  message carries a `Call Trace:`. Determine them against a real kernel
+  clone before posting rather than guessing hashes.
+- **0001 has two checkpatch CHECKs**, "spaces preferred around that '/'"
+  on the touched lines. That spacing is pre-existing and matches the
+  identical loop in `nv_get_regs()` (forcedeth.c:4588), so it was left
+  alone to keep the fix minimal. A reviewer may still ask for it.
+- **0002 drops a partial trailing row** from the debug dump: 16 bytes for
+  VER1, 20 for VER2, 4 for VER3. That is a deliberate trade against
+  open-coding a second narrower dump in a debug-only path, and the commit
+  message says so. If a reviewer wants those registers back, the
+  follow-up is a short remainder loop after the main one.
+- Nothing has been sent anywhere. Marek approves recipients and full text
+  first, as with the nouveau series.
 
-## Still open
+## Verified state after both patches
 
-`nv_tx_timeout()` (forcedeth.c:2743) dumps registers with
-`for (i = 0; i <= np->register_size; i += 32)`, which starts its last row
-at `0x600` and reads through `0x61c`, past the `0x604` window. That one is
-not a plain `<=` to `<` fix (the final row overruns either way), it needs
-`i + 32 <= np->register_size` or explicit handling of the partial row.
-It sits behind the `debug_tx_timeout` module parameter, which is off by
-default, and it touches MMIO rather than an array, so UBSAN does not flag
-it. Separate patch when someone gets to it.
+    2743:  for (i = 0; i + 32 <= np->register_size; i += 32) {
+    4588:  for (i = 0; i < np->register_size/sizeof(u32); i++)     (was already correct)
+    6224:  for (i = 0; i < np->register_size/sizeof(u32); i++)
+    6239:  for (i = 0; i < np->register_size/sizeof(u32); i++)
+
+No `i <= np->register_size` bounds left in the file.

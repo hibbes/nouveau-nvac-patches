@@ -1,0 +1,58 @@
+From: Marek Czernohous <marek@czernohous.de>
+Date: 2026-08-04
+Subject: [PATCH] forcedeth: stop the tx_timeout register dump past the ioremap window
+
+nv_tx_timeout() dumps the register window in rows of eight dwords:
+
+	for (i = 0; i <= np->register_size; i += 32) {
+		netdev_info(dev, "%3x: %08x ... %08x\n", i,
+			    readl(base + i + 0), ..., readl(base + i + 28));
+
+The loop bound only checks the row's starting offset, so the last row
+always reads 32 bytes from a position that may be at, or just below, the
+end of the window. base is mapped with exactly that length:
+
+	np->base = ioremap(addr, np->register_size);
+
+so the tail of that final row lands outside the mapping. Per variant, on
+the last iteration the dump reads past the end by:
+
+	NV_PCI_REGSZ_VER1 (0x270): row 0x260 reads to 0x27f, 16 bytes over
+	NV_PCI_REGSZ_VER2 (0x2d4): row 0x2c0 reads to 0x2df, 12 bytes over
+	NV_PCI_REGSZ_VER3 (0x604): row 0x600 reads to 0x61f, 28 bytes over
+
+None of the three sizes is a multiple of 32, so this happens on every
+supported device, not just one of them.
+
+Changing <= to < is not enough: register_size is a length and every
+size above is larger than its last row start, so i still reaches the
+offending row. Check that the whole row fits instead.
+
+The trade-off is that a partial trailing row is no longer dumped: 16
+bytes for VER1, 20 for VER2, 4 for VER3. That seemed preferable to
+reading outside the mapping, and to open-coding a second, narrower dump
+for the remainder in what is a debug-only path. Extending the dump to
+cover the tail can be done on top if anyone misses those registers.
+
+Only reachable with the debug_tx_timeout module parameter, which
+defaults to false, so this is not a hot path. Not caught by UBSAN
+either, since these are MMIO reads rather than an array access, unlike
+the neighbouring saved_config_space off-by-one.
+
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+Assisted-by: Claude:claude-opus-5
+---
+ drivers/net/ethernet/nvidia/forcedeth.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+--- a/drivers/net/ethernet/nvidia/forcedeth.c
++++ b/drivers/net/ethernet/nvidia/forcedeth.c
+@@ -2740,7 +2740,7 @@ static void nv_tx_timeout(struct net_dev
+ 
+ 		netdev_info(dev, "Ring at %lx\n", (unsigned long)np->ring_addr);
+ 		netdev_info(dev, "Dumping tx registers\n");
+-		for (i = 0; i <= np->register_size; i += 32) {
++		for (i = 0; i + 32 <= np->register_size; i += 32) {
+ 			netdev_info(dev,
+ 				    "%3x: %08x %08x %08x %08x "
+ 				    "%08x %08x %08x %08x\n",
