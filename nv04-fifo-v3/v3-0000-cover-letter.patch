@@ -1,6 +1,6 @@
 From 972c6840ec7d4ff9c13f29af22503846d35866d8 Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
-Date: Thu, 6 Aug 2026 12:15:01 +0200
+Date: Thu, 6 Aug 2026 13:30:42 +0200
 Subject: [PATCH v3 0/5] drm/nouveau: nv04 FIFO cleanup + recovery for Tesla
 
 v2 of this series is here:
@@ -151,10 +151,17 @@ Testing
     window expiry works.
   - The "channel N killed!" line is the one that never appeared before patch
     2/3. It proves the event is delivered and the fences of the killed
-    channel are signalled: no kworker ended up in dma_fence_default_wait,
-    no TTM worker was left in D state (there were twelve during the freeze),
-    the compositor kept running, and the display commit never had to fall
-    back to any timeout.
+    channel are signalled: across two runs no kworker ended up in
+    dma_fence_default_wait and no TTM worker was left in D state, where the
+    unpatched freeze left twelve, and the display commit never had to fall
+    back to any timeout. The GPU never parked in any of these runs.
+  - What does not survive is the client, and that is worth stating plainly.
+    The killed channel belonged to Xwayland, and in both runs Xwayland and
+    the compositor exited; the session came back about fifteen seconds
+    later. That is the trade this series makes. Before 2/3 the same fault
+    left the desktop frozen on fences that were never signalled, with
+    nothing to do but wait minutes or reboot. With it the affected clients
+    die and are restarted, and the kernel side stays clean.
   - The victim process died with a SIGSEGV inside libgallium. That is the
     known Mesa nv50 limitation (no GL robustness on this generation), not a
     consequence of these patches.
