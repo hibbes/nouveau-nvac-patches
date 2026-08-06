@@ -1,0 +1,130 @@
+From: Marek Czernohous <marek@czernohous.de>
+Date: Sat, 25 Jul 2026 21:20:00 +0200
+Subject: [PATCH] drm/nouveau/fifo: debug fault injector for the Tesla recovery path
+
+LOCAL DEBUG PATCH, not for upstream. Drives nv04_fifo_recover() directly through
+two write-only module parameters so the Tier-0 ladder, the Tier-1 kill and
+everything that hangs off it (channel-killed event, fence signalling, userspace
+fallout) can be exercised deterministically instead of waiting for a real
+CACHE_ERROR, which on this machine happens roughly once a month.
+
+  echo 1 > /sys/module/nouveau/parameters/fifo_inject_list   list live channels
+  echo N > /sys/module/nouveau/parameters/fifo_inject_chid   fault on channel N
+
+It does not simulate the hardware fault; it enters the recovery path exactly
+where the interrupt handler would, with a plausible CACHE_ERROR info word.
+Applies after 0020.
+---
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/recover.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/recover.c
+@@ -11,6 +11,7 @@
+ 
+ #include "priv.h"
+ #include "chan.h"
++#include "chid.h"
+ 
+ #include <core/device.h>
+ #include <subdev/timer.h>
+@@ -19,6 +20,8 @@
+ #include <linux/jiffies.h>
+ #include <linux/ktime.h>
+ #include <linux/math64.h>
++#include <linux/moduleparam.h>
++#include <linux/kstrtox.h>
+ #include <drm/drm_drv.h>
+ #include <drm/drm_device.h>
+ 
+@@ -183,9 +186,93 @@
+ 	return t ? div_u64(ktime_get_ns() - t, NSEC_PER_MSEC) : -1;
+ }
+ 
++/*
++ * Debug fault injector (patch 0022, local only, not for upstream).
++ *
++ * Drives nv04_fifo_recover() directly so the Tier-0 ladder, the Tier-1 kill
++ * and everything that hangs off it (the channel-killed event, the fence
++ * signalling, the userspace fallout) can be exercised deterministically
++ * instead of waiting for a real CACHE_ERROR.  It does NOT simulate the
++ * hardware fault itself; it enters the recovery path exactly where the
++ * interrupt handler would.
++ *
++ *   echo 1  > /sys/module/nouveau/parameters/fifo_inject_list   list channels
++ *   echo 2  > /sys/module/nouveau/parameters/fifo_inject_chid   fault on ch 2
++ *
++ * Single target pointer: this box has one GPU and this is a debug aid.
++ */
++static struct nvkm_fifo *nv04_fifo_inject_target;
++
++static int
++nv04_fifo_inject_list_set(const char *val, const struct kernel_param *kp)
++{
++	struct nvkm_fifo *fifo = READ_ONCE(nv04_fifo_inject_target);
++	struct nvkm_subdev *subdev;
++	int i, nr, found = 0;
++
++	if (!fifo)
++		return -ENODEV;
++
++	subdev = &fifo->engine.subdev;
++	nr = fifo->chid ? fifo->chid->nr : 0;
++	nvkm_error(subdev, "inject: listing %d channel ids\n", nr);
++
++	for (i = 0; i < nr; i++) {
++		struct nvkm_chan *chan;
++		unsigned long flags;
++
++		chan = nvkm_chan_get_chid(&fifo->engine, i, &flags);
++		if (chan) {
++			nvkm_error(subdev, "inject:   ch %3d [%s] errored %d\n",
++				   i, chan->name, atomic_read(&chan->errored));
++			found++;
++			nvkm_chan_put(&chan, flags);
++		}
++	}
++	nvkm_error(subdev, "inject: %d live channel(s)\n", found);
++	return 0;
++}
++
++static const struct kernel_param_ops nv04_fifo_inject_list_ops = {
++	.set = nv04_fifo_inject_list_set,
++};
++
++static int
++nv04_fifo_inject_chid_set(const char *val, const struct kernel_param *kp)
++{
++	struct nvkm_fifo *fifo = READ_ONCE(nv04_fifo_inject_target);
++	unsigned int chid;
++	int ret;
++
++	if (!fifo)
++		return -ENODEV;
++
++	ret = kstrtouint(val, 0, &chid);
++	if (ret)
++		return ret;
++	if (fifo->chid && chid >= (unsigned int)fifo->chid->nr)
++		return -EINVAL;
++
++	nvkm_error(&fifo->engine.subdev,
++		   "inject: synthesising CACHE_ERROR fault on ch %u\n", chid);
++	nv04_fifo_recover(fifo, chid, NV04_FAULT_CACHE_ERROR,
++			  ((u64)0x0f00 << 32) | 0x0000007b);
++	return 0;
++}
++
++static const struct kernel_param_ops nv04_fifo_inject_chid_ops = {
++	.set = nv04_fifo_inject_chid_set,
++};
++
++MODULE_PARM_DESC(fifo_inject_list, "debug: write anything to log live channel ids");
++module_param_cb(fifo_inject_list, &nv04_fifo_inject_list_ops, NULL, 0200);
++MODULE_PARM_DESC(fifo_inject_chid, "debug: write a chid to drive the FIFO recovery path for it");
++module_param_cb(fifo_inject_chid, &nv04_fifo_inject_chid_ops, NULL, 0200);
++
+ void
+ nv04_fifo_wedge_init(struct nvkm_fifo *fifo)
+ {
++	WRITE_ONCE(nv04_fifo_inject_target, fifo);
+ 	spin_lock_init(&fifo->wedge.lock);
+ 	INIT_WORK(&fifo->wedge.work, nv04_fifo_wedge_work);
+ 	atomic_set(&fifo->wedge.wedged, 0);
