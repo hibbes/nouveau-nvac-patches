@@ -128,8 +128,8 @@ Testing
 
   Soak. The v1 patches ran on that machine from 2026-05 onwards, which is how
   defects 1 and 2 were found. The v2 code, including the escalation ladder and
-  the widened event subscription, has been running since 2026-07-25, ten days
-  as of this posting, across a kernel bump from 7.1.5 to 7.1.6 with the patch
+  the widened event subscription, has been running since 2026-07-25, twelve
+  days as of this posting, across a kernel bump from 7.1.5 to 7.1.6 with the patch
   series unchanged. Since every channel now subscribes to the kill event, the
   interesting long-run question is channel churn, so the soak is ordinary
   daily driving with a browser and GL applications rather than a synthetic
@@ -140,7 +140,7 @@ Testing
   module parameter (default on) so I can fall back to the Fermi+ behaviour
   without rebuilding. Patch 2/3 as posted does it unconditionally. At the
   default the two are behaviourally identical, and that default is what ran
-  for the ten days; the parameter itself is a local debugging aid and I did
+  for those twelve days; the parameter itself is a local debugging aid and I did
   not think it belonged upstream.
 
   Compile coverage, precisely: the changed translation units build clean in a
@@ -148,6 +148,12 @@ Testing
   onto the mainline base commit below, but I have not built it there, because
   my mainline checkout is sparse. The full module, in the downstream form, is
   built and booted on the reference machine.
+
+  A note on MAINTAINERS. Patch 3/3 adds a new file
+  drivers/gpu/drm/nouveau/nvkm/engine/fifo/recover.c. The change is covered
+  by the existing nouveau MAINTAINERS section (drivers/gpu/drm/nouveau/),
+  so no MAINTAINERS update is included. checkpatch.pl flags this as a hint;
+  it is not load-bearing.
 
 AI assistance
 

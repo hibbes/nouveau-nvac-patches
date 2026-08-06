@@ -1,4 +1,4 @@
-From 074be20e16d0b7c0f1f1f2851145e3be90e5816b Mon Sep 17 00:00:00 2001
+From 482610c9a7b9f10b60365662f85f9a26ecc8521b Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <mczernohous@gmail.com>
 Date: Sat, 25 Jul 2026 20:09:37 +0200
 Subject: [PATCH v2 2/3] drm/nouveau: subscribe to channel-kill events on NV50
@@ -31,6 +31,7 @@ does not discriminate by class. Pre-NV50 chips keep the old behaviour,
 so NV04 to NV40 are unaffected.
 
 Assisted-by: Claude:claude-opus-5
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
 ---
  drivers/gpu/drm/nouveau/nouveau_chan.c | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
