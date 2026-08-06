@@ -1,4 +1,4 @@
-From b4593134c06f5968ca8bd9fd455c9b7ee5c9a169 Mon Sep 17 00:00:00 2001
+From a4adf347356c0269225627115d112e66d473a03c Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
 Date: Mon, 4 May 2026 16:30:00 +0200
 Subject: [PATCH v3 5/5] drm/nouveau/fifo: add recovery path for Tesla

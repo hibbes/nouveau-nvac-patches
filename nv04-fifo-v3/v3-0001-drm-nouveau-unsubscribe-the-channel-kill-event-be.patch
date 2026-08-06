@@ -1,4 +1,4 @@
-From 84b01043a1f6dd3eec2cae2486695842cdf61e81 Mon Sep 17 00:00:00 2001
+From ad3858e00edf0364c41c817380c048730ec30eec Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
 Date: Thu, 6 Aug 2026 11:31:31 +0200
 Subject: [PATCH v3 1/5] drm/nouveau: unsubscribe the channel-kill event before
@@ -31,6 +31,7 @@ alongside.
 Drop the subscription before anything it depends on is torn down.
 
 Assisted-by: Claude:claude-opus-5
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
 ---
  drivers/gpu/drm/nouveau/nouveau_chan.c | 9 ++++++++-
  1 file changed, 8 insertions(+), 1 deletion(-)

@@ -1,4 +1,4 @@
-From 9d9898c864c67e1ec218c56f32493876cb80c123 Mon Sep 17 00:00:00 2001
+From 2cb7ce2416bb2b49ba7702839ea3ffeaf4d11ab9 Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
 Date: Sat, 25 Jul 2026 20:09:37 +0200
 Subject: [PATCH v3 4/5] drm/nouveau: subscribe to channel-kill events on NV50
