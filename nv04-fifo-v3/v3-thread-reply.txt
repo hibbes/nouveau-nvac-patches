@@ -1,3 +1,12 @@
+To: nouveau@lists.freedesktop.org
+Cc: Lyude Paul <lyude@redhat.com>,
+    Danilo Krummrich <dakr@kernel.org>,
+    dri-devel@lists.freedesktop.org,
+    linux-kernel@vger.kernel.org
+Subject: Re: [PATCH v2 0/3] drm/nouveau: nv04 FIFO cleanup + recovery for Tesla
+In-Reply-To: <20260806085228.1848994-1-mczernohous@gmail.com>
+References: <20260806085228.1848994-1-mczernohous@gmail.com>
+
 Both findings are correct, thank you.
 
 I checked them against mainline rather than against my downstream tree:
