@@ -12,6 +12,7 @@ Die Message-IDs der Serien verwenden **unterschiedliche Absenderadressen**:
 | April v1 | `20260409172126.115441-1-marek@czernohous.de` |
 | Mai v1 | `20260513175014.96599-1-marek@czernohous.de` |
 | Juni v3 | `20260611124535.527275-1-`**`mczernohous@gmail.com`** |
+| August v2 (nv04-FIFO) | `20260806085228.1848994-1-`**`mczernohous@gmail.com`** |
 
 Ab dem Juni-Versand läuft `git send-email --from="<gmail>"`, deshalb baut git die
 Message-ID aus der Gmail-Adresse. Wer den v3-Thread mit `marek@czernohous.de`
@@ -48,20 +49,23 @@ mitbekommen. Das gehört in `~/.claude/morning-briefing.sh` nachgetragen.
 
 | | |
 |---|---|
-| Status | **fertig vorbereitet, nicht gesendet** |
+| Status | **GESENDET 2026-08-06 10:52 CEST** |
+| Betreff | `[PATCH v2 0/3] drm/nouveau: nv04 FIFO cleanup + recovery for Tesla` |
+| Message-ID | `20260806085228.1848994-1-mczernohous@gmail.com` |
+| Verbreitung | nouveau und dri-devel je 4 Mails binnen Minuten; lkml zog spaeter nach |
+| Basis | `c21bb4193868` (mainline, 04.08.2026) |
 | Quellen | `nv04-fifo-v2/` in diesem Repo |
-| Basis | rebast auf `c21bb4193868` (mainline, 04.08.2026) |
-| Belege | Injektionsbeweis 25.07., Cover am 04.08. gegen die Artefakte geprüft und in vier Punkten korrigiert |
+| SMTP | 4x Result 250 |
 
-**Vor dem Versand offen:**
+Vor dem Versand geprueft: Cover und alle drei Commit-Messages gegen Quellcode,
+lore-Archiv, Injektionslog und Hardware. Zwei unbelegte Aussagen wurden dabei
+entfernt (eine erfundene G94-Testangabe in 1/3, ein "only a reboot clears it"
+in 2/3, das der eigenen Korrektur vom 22.07. widersprach). Details in
+`nv04-fifo-v2/COVER-PRUEFUNG-2026-08-04.md` und im Commit `5814df0`.
 
-- `Signed-off-by` auf 2/3 und 3/3. Das setzt **Marek selbst**, siehe
-  `nv04-fifo-v2/SENDEN.md` Schritt 2a. `Documentation/process/coding-assistants.rst`
-  verbietet der KI ausdrücklich, DCO-Zeilen zu setzen.
-- Zwei checkpatch-Entscheidungen: der `spinlock_t`-Kommentar, und die
-  MAINTAINERS-Note zum neuen `recover.c`, die im v1-Cover stand und im v2-Cover
-  fehlt.
-- Die Cover-Zusage zum `drm_panic`-ioremap-Report ist seit 02.06. offen.
+**Jetzt beobachten:** der Thread ist im Morgen-Briefing unter ii-b) eingetragen.
+Beim Juni-Versand meldete sich `sashiko-bot@kernel.org` 13 Minuten nach dem
+Send mit einem berechtigten Befund; darauf besonders achten.
 
 ## Spur 4: forcedeth (netdev, nicht nouveau)
 
