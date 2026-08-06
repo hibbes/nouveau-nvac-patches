@@ -1,0 +1,60 @@
+From: Marek Czernohous <marek@czernohous.de>
+Date: 2026-08-06
+Subject: [PATCH] drm/nouveau/fifo: Streak-Aufraeumung erst nach nvkm_chid_put
+
+Lokale Entsprechung zur Korrektur in v3 5/5. Der Aufraeumblock fuer
+chfault[].owner in nvkm_chan_del() lief vor nvkm_chid_put() und war
+damit gegen nv04_fifo_recover() offen: bis chid_put den Slot nullt, ist
+der sterbende Kanal noch auffindbar, der Recover-Pfad setzt cf->owner
+erneut, und ein spaeter an derselben Slab-Adresse angelegter Kanal erbt
+den Fault-Streak.
+
+nvkm_chid_put() nimmt chid->lock und cgrp->lock; letzteres haelt
+nvkm_chan_get_chid() bis nvkm_chan_put(). Nach seiner Rueckkehr kann
+also weder ein neuer Lookup den Kanal finden noch ein alter laufen.
+chan->id bleibt unangetastet, der Slot ist weiter adressierbar.
+
+Gefunden vom Sashiko-Review-Bot auf der v2-Einreichung.
+
+Assisted-by: Claude:claude-opus-5
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+---
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/chan.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/chan.c
+@@ -275,14 +275,22 @@ nvkm_chan_del(struct nvkm_chan **pchan)
+ 	nvkm_gpuobj_del(&chan->ramfc);
+ 
+ 	if (chan->cgrp) {
+-		/* 0006-v3: drop this channel's Tier-0 fault streak before the chid
+-		 * is handed out again.  chfault[].owner is an identity token only
+-		 * (never dereferenced), but SLUB hands back the same address in a
+-		 * respawn loop, so a fresh channel could inherit the streak and be
+-		 * killed on its first fault.  wedge.lock stays a leaf here: no
+-		 * chan/cgrp spinlock is held at this point. */
+ 		struct nvkm_fifo *fifo = chan->cgrp->runl->fifo;
+ 
++		nvkm_chid_put(chan->cgrp->runl->chid, chan->id, &chan->cgrp->lock);
++
++		/* 0006-v3, Reihenfolge korrigiert 2026-08-06: den Tier-0-Streak
++		 * dieses Kanals verwerfen, NACHDEM nvkm_chid_put() die id aus dem
++		 * chid-Map genommen hat.  chfault[].owner ist nur ein
++		 * Identitaets-Token (nie dereferenziert), aber SLUB liefert in einer
++		 * Respawn-Schleife dieselbe Adresse zurueck, ein frischer Kanal
++		 * koennte den Streak also erben und beim ersten Fault sterben.
++		 * Vor nvkm_chid_put() ist der Kanal noch auffindbar und
++		 * nv04_fifo_recover() wuerde cf->owner erneut mit einem gleich
++		 * freizugebenden Zeiger belegen.  nvkm_chid_put() nimmt cgrp->lock,
++		 * das nvkm_chan_get_chid() bis nvkm_chan_put() haelt, danach kann
++		 * kein solcher Lookup mehr laufen.  chan->id bleibt unangetastet.
++		 * wedge.lock bleibt hier ein Leaf. */
+ 		if (chan->id >= 0) {
+ 			unsigned long flags;
+ 			typeof(&fifo->wedge.chfault[0]) cf =
+@@ -294,7 +302,6 @@ nvkm_chan_del(struct nvkm_chan **pchan)
+ 			spin_unlock_irqrestore(&fifo->wedge.lock, flags);
+ 		}
+ 
+-		nvkm_chid_put(chan->cgrp->runl->chid, chan->id, &chan->cgrp->lock);
+ 		nvkm_cgrp_unref(&chan->cgrp);
+ 	}
+ 

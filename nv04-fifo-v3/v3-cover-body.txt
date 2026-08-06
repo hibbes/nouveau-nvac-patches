@@ -2,9 +2,9 @@ v2 of this series is here:
 
   https://lore.kernel.org/nouveau/20260806085228.1848994-1-mczernohous@gmail.com/
 
-The Sashiko review bot flagged two pre-existing races on that posting. I
-checked both against mainline and it is right on both counts, so v3 adds
-them as prerequisites in front of the subscription change:
+The Sashiko review bot flagged three issues on that posting. I checked all
+three and it is right on each, so v3 adds two prerequisites in front of the
+subscription change and fixes the third inside 5/5:
 
 1/5 The channel-kill subscription outlives the fence context in
     nouveau_channel_del(): the context is freed first and the event is
@@ -19,14 +19,24 @@ them as prerequisites in front of the subscription change:
     The NULL check in nouveau_channel_kill() does not cover that: the
     pointer is non-NULL and unusable.
 
-Neither is reachable below Fermi today, which is exactly why they matter
-here: 4/5 lowers the gate to NV50 and 5/5 adds the caller that kills
-Tesla channels, so this series is what makes them reachable. I should
-have carried them from the start. The v2 cover letter even described the
-teardown ordering and dismissed it as "most of that window is harmless".
-That judgement was wrong, and I appreciate the catch.
+5/5 The per-channel fault streak was cleared before nvkm_chid_put() had
+    taken the id out of the chid map. Until it does the dying channel is
+    still resolvable, so nv04_fifo_recover() could re-arm cf->owner with
+    a pointer that is about to be freed, and a channel allocated later at
+    the same address would then inherit the streak. The cleanup now runs
+    after nvkm_chid_put(), which takes cgrp->lock and therefore also
+    waits out any lookup still in flight.
 
-The remaining three patches are unchanged from v2 apart from rebasing.
+The first two are pre-existing and unreachable below Fermi today, which is
+exactly why they matter here: 4/5 lowers the gate to NV50 and 5/5 adds the
+caller that kills Tesla channels, so this series is what makes them
+reachable. I should have carried them from the start. The v2 cover letter
+even described the teardown ordering and dismissed it as "most of that
+window is harmless". That judgement was wrong, and I appreciate the catch.
+The third was my own bug.
+
+3/5 and 4/5 are unchanged from v2 apart from the rebase; 5/5 carries the
+ordering fix described above.
 
 The original v1 report follows, since it still explains why 5/5 exists.
 
@@ -210,9 +220,12 @@ Changes since v2
 
   - new 1/5: unsubscribe the channel-kill event before the fence context
   - new 2/5: subscribe to the channel-kill event after the fence context
-  - both found by the Sashiko review bot on the v2 posting, confirmed
-    against mainline, and placed before the subscription change
-  - no functional change to the three patches carried over from v2
+  - 5/5: clear the per-channel fault streak after nvkm_chid_put(), not
+    before, so the recovery path cannot re-arm a slot for a channel that
+    is going away
+  - all three found by the Sashiko review bot on the v2 posting and
+    confirmed before acting on them
+  - 3/5 and 4/5 unchanged from v2 apart from the rebase
 
 Changes since v1
 
