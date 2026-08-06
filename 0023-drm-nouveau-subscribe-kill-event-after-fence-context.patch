@@ -1,0 +1,109 @@
+From: Marek Czernohous <marek@czernohous.de>
+Date: 2026-08-06
+Subject: [PATCH] drm/nouveau: subscribe to the channel-kill event after the fence context
+
+Lokale Entsprechung zu v3 2/5 der ML-Serie, angepasst an den hier
+laufenden Stack (das Abo-Gate traegt durch 0019 den Modulparameter
+chan_kill_event).
+
+nouveau_channel_init() schaltet das Kill-Abo scharf, bevor der
+Fence-Kontext existiert. Die Backends setzen chan->fence per kzalloc,
+bevor nouveau_fence_context_new() spin_lock_init(&fctx->lock) und
+INIT_LIST_HEAD(&fctx->pending) ausfuehrt. Der Guard if (chan->fence) in
+nouveau_channel_kill() greift in diesem Fenster nicht: der Zeiger ist
+non-NULL und unbrauchbar, nouveau_fence_context_kill() nimmt ein nie
+initialisiertes Spinlock und laeuft ueber einen Listenkopf, dessen next
+noch die NULL von kzalloc traegt.
+
+Auf Tesla ist das erst erreichbar, seit 0019 das Abo auf NV50 gesenkt hat
+und 0020 einen Kanal-Killer mitbringt. Gefunden vom Sashiko-Review-Bot
+auf der v2-Einreichung vom 2026-08-06.
+
+Assisted-by: Claude:claude-opus-5
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+---
+--- a/drivers/gpu/drm/nouveau/nouveau_chan.c
++++ b/drivers/gpu/drm/nouveau/nouveau_chan.c
+@@ -366,34 +366,6 @@ nouveau_channel_init(struct nouveau_chan
+ 	if (ret)
+ 		return ret;
+ 
+-	/* Patch 0020a: subscribe channel-killed events on NV50+ (Tesla) too, not
+-	 * only Fermi+.  Without a subscriber the nvkm ERRORED event (fifo/chan.c)
+-	 * is a dead letter, nouveau_fence_context_kill() never runs, and the
+-	 * killed channel's fences never signal: display commits (disp.c) and TTM
+-	 * then wait forever (dma-fence contract violation).  Runtime escape:
+-	 * nouveau.chan_kill_event=0 restores the legacy Fermi+-only behaviour. */
+-	if (chan->user.oclass >= (nouveau_chan_kill_event ?
+-				  NV50_CHANNEL_GPFIFO : FERMI_CHANNEL_GPFIFO)) {
+-		DEFINE_RAW_FLEX(struct nvif_event_v0, args, data,
+-				sizeof(struct nvif_chan_event_v0));
+-		struct nvif_chan_event_v0 *host =
+-				(struct nvif_chan_event_v0 *)args->data;
+-
+-		host->version = 0;
+-		host->type = NVIF_CHAN_EVENT_V0_KILLED;
+-
+-		ret = nvif_event_ctor(&chan->user, "abi16ChanKilled", chan->chid,
+-				      nouveau_channel_killed, false,
+-				      args, __struct_size(args), &chan->kill);
+-		if (ret == 0)
+-			ret = nvif_event_allow(&chan->kill);
+-		if (ret) {
+-			NV_ERROR(drm, "Failed to request channel kill "
+-				      "notification: %d\n", ret);
+-			return ret;
+-		}
+-	}
+-
+ 	/* allocate dma objects to cover all allowed vram, and gart */
+ 	if (device->info.family < NV_DEVICE_INFO_V0_FERMI) {
+ 		if (device->info.family >= NV_DEVICE_INFO_V0_TESLA) {
+@@ -497,7 +469,46 @@ nouveau_channel_init(struct nouveau_chan
+ 	}
+ 
+ 	/* initialise synchronisation */
+-	return nouveau_fence(drm)->context_new(chan);
++	ret = nouveau_fence(drm)->context_new(chan);
++	if (ret)
++		return ret;
++
++	/*
++	 * Subscribe to the channel-kill event last: the handler dereferences
++	 * chan->fence, and the backends publish that pointer from kzalloc()
++	 * before nouveau_fence_context_new() initialises the lock and the
++	 * pending list.  An event in between would find a non-NULL but
++	 * unusable context.  Upstream as v3 2/5.
++	 */
++	/* Patch 0020a: subscribe channel-killed events on NV50+ (Tesla) too, not
++	 * only Fermi+.  Without a subscriber the nvkm ERRORED event (fifo/chan.c)
++	 * is a dead letter, nouveau_fence_context_kill() never runs, and the
++	 * killed channel's fences never signal: display commits (disp.c) and TTM
++	 * then wait forever (dma-fence contract violation).  Runtime escape:
++	 * nouveau.chan_kill_event=0 restores the legacy Fermi+-only behaviour. */
++	if (chan->user.oclass >= (nouveau_chan_kill_event ?
++				  NV50_CHANNEL_GPFIFO : FERMI_CHANNEL_GPFIFO)) {
++		DEFINE_RAW_FLEX(struct nvif_event_v0, args, data,
++				sizeof(struct nvif_chan_event_v0));
++		struct nvif_chan_event_v0 *host =
++				(struct nvif_chan_event_v0 *)args->data;
++
++		host->version = 0;
++		host->type = NVIF_CHAN_EVENT_V0_KILLED;
++
++		ret = nvif_event_ctor(&chan->user, "abi16ChanKilled", chan->chid,
++				      nouveau_channel_killed, false,
++				      args, __struct_size(args), &chan->kill);
++		if (ret == 0)
++			ret = nvif_event_allow(&chan->kill);
++		if (ret) {
++			NV_ERROR(drm, "Failed to request channel kill "
++				      "notification: %d\n", ret);
++			return ret;
++		}
++	}
++
++	return 0;
+ }
+ 
+ int
