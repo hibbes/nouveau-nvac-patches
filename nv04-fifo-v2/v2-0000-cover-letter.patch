@@ -1,6 +1,6 @@
-From 8295df15b51c4ec1b817d2d8930ea395d7c7578f Mon Sep 17 00:00:00 2001
-From: Marek Czernohous <mczernohous@gmail.com>
-Date: Thu, 1 Jan 1970 00:00:00 +0000
+From 55d98e39ad9dec313cbe6d9622742c8a6288fcb5 Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
+Date: Thu, 6 Aug 2026 10:17:24 +0200
 Subject: [PATCH v2 0/3] drm/nouveau: nv04 FIFO cleanup + recovery for Tesla
 
 v1 of this series is here:

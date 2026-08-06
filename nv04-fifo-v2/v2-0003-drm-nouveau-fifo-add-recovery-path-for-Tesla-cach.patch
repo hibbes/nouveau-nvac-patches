@@ -1,10 +1,8 @@
-From 8295df15b51c4ec1b817d2d8930ea395d7c7578f Mon Sep 17 00:00:00 2001
-From: Marek Czernohous <mczernohous@gmail.com>
+From 55d98e39ad9dec313cbe6d9622742c8a6288fcb5 Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
 Date: Mon, 4 May 2026 16:30:00 +0200
 Subject: [PATCH v2 3/3] drm/nouveau/fifo: add recovery path for Tesla
  cache_error/dma_pusher
-
-From: Marek Czernohous <marek@czernohous.de>
 
 On Tesla / NV50 family chipsets (nv50, g84, g94, g98, mcp77, mcp79), FIFO
 fault handling in nv04_fifo_intr_cache_error() and

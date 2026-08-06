@@ -1,10 +1,8 @@
-From 50087ccab0f2e1fb6420a41ea5c8f41f0c979911 Mon Sep 17 00:00:00 2001
-From: Marek Czernohous <mczernohous@gmail.com>
+From 8fa4c297bbd5105221bd410126720d99a93d9fb5 Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
 Date: Thu, 9 Apr 2026 20:30:00 +0200
 Subject: [PATCH v2 1/3] drm/nouveau/fifo/nv04: filter benign CACHE_ERROR from
  Mesa NV50 bind probe
-
-From: Marek Czernohous <marek@czernohous.de>
 
 The Mesa userspace driver issues a method-0x0060 / data-0xbeef02xx
 binding probe on Tesla GPUs that ends up triggering CACHE_ERROR in the
@@ -14,7 +12,7 @@ but it floods dmesg at error level on every X/Wayland session start.
 Filter that specific pattern down to debug level so dmesg stays clean
 while real CACHE_ERROR conditions are still logged at error level.
 
-Tested on Apple Mac Mini (MCP79, NVAC 0xac080b1) and a G94: dmesg has
+Tested on an Apple Mac mini Late 2009 (MCP79, NVAC 0xac080b1): dmesg has
 no CACHE_ERROR spam during normal operation, the previously visible
 beef02xx pattern now only appears at debug level.
 
