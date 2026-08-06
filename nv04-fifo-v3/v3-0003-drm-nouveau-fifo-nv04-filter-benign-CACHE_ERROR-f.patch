@@ -1,0 +1,63 @@
+From 0680864af31cc739d7a7c7ce8da668ed8176908f Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
+Date: Thu, 9 Apr 2026 20:30:00 +0200
+Subject: [PATCH v3 3/5] drm/nouveau/fifo/nv04: filter benign CACHE_ERROR from
+ Mesa NV50 bind probe
+
+The Mesa userspace driver issues a method-0x0060 / data-0xbeef02xx
+binding probe on Tesla GPUs that ends up triggering CACHE_ERROR in the
+PFIFO interrupt handler. The probe is harmless and recovers cleanly,
+but it floods dmesg at error level on every X/Wayland session start.
+
+Filter that specific pattern down to debug level so dmesg stays clean
+while real CACHE_ERROR conditions are still logged at error level.
+
+Tested on an Apple Mac mini Late 2009 (MCP79, NVAC 0xac080b1): dmesg has
+no CACHE_ERROR spam during normal operation, the previously visible
+beef02xx pattern now only appears at debug level.
+
+Assisted-by: Claude:claude-opus-5
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+---
+ .../gpu/drm/nouveau/nvkm/engine/fifo/nv04.c   | 25 ++++++++++++++-----
+ 1 file changed, 19 insertions(+), 6 deletions(-)
+
+diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c
+index c4b8e567d86f..fa13cd55b593 100644
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c
+@@ -327,12 +327,25 @@ nv04_fifo_intr_cache_error(struct nvkm_fifo *fifo, u32 chid, u32 get)
+ 
+ 	if (!(pull0 & 0x00000100) ||
+ 	    !nv04_fifo_swmthd(device, chid, mthd, data)) {
+-		chan = nvkm_chan_get_chid(&fifo->engine, chid, &flags);
+-		nvkm_error(subdev, "CACHE_ERROR - "
+-			   "ch %d [%s] subc %d mthd %04x data %08x\n",
+-			   chid, chan ? chan->name : "unknown",
+-			   (mthd >> 13) & 7, mthd & 0x1ffc, data);
+-		nvkm_chan_put(&chan, flags);
++		/*
++		 * Filter benign Mesa NV50 bind probe: mthd 0x0060 with
++		 * data 0xbeef02xx is a harmless userspace probe on Tesla
++		 * GPUs and does not indicate an actual error condition.
++		 * Demote to debug to keep dmesg clean while still catching
++		 * real CACHE_ERROR events.
++		 */
++		if ((mthd & 0x1ffc) == 0x0060 &&
++		    (data & 0xffffff00) == 0xbeef0200) {
++			nvkm_debug(subdev, "CACHE_ERROR - ch %d subc %d mthd %04x data %08x (benign, skipped)\n",
++				   chid, (mthd >> 13) & 7, mthd & 0x1ffc, data);
++		} else {
++			chan = nvkm_chan_get_chid(&fifo->engine, chid, &flags);
++			nvkm_error(subdev, "CACHE_ERROR - "
++				   "ch %d [%s] subc %d mthd %04x data %08x\n",
++				   chid, chan ? chan->name : "unknown",
++				   (mthd >> 13) & 7, mthd & 0x1ffc, data);
++			nvkm_chan_put(&chan, flags);
++		}
+ 	}
+ 
+ 	nvkm_wr32(device, NV04_PFIFO_CACHE1_DMA_PUSH, 0);
+-- 
+2.54.0
+

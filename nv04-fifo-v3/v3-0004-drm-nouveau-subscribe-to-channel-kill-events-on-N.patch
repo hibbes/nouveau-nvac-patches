@@ -1,0 +1,53 @@
+From 9d9898c864c67e1ec218c56f32493876cb80c123 Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
+Date: Sat, 25 Jul 2026 20:09:37 +0200
+Subject: [PATCH v3 4/5] drm/nouveau: subscribe to channel-kill events on NV50
+ and newer
+
+nouveau_channel_init() only subscribes to the channel-killed event for
+FERMI_CHANNEL_GPFIFO and newer. On NV50/Tesla the subscription therefore
+never happens, and nvkm_chan_error()'s NVKM_CHAN_EVENT_ERRORED is
+delivered into an empty notifier list.
+
+Today that is harmless, because nothing kills a channel on Tesla: the
+only nvkm_chan_error() callers are the Fermi and newer recovery paths.
+The next patch adds such a caller for Tesla, and without a subscriber
+the consequences are severe. nouveau_channel_killed() never runs, so
+nouveau_fence_context_kill() never runs either, and the pending fences
+of the killed channel are never signalled. Everything waiting on them
+waits forever: drm_atomic_helper_wait_for_fences() in the display commit
+tail waits uninterruptibly and without a timeout, and the TTM delayed
+delete workers wait in TASK_UNINTERRUPTIBLE. The user sees a frozen
+desktop on a machine that is otherwise alive; it stays that way for
+minutes until the fences time out, and a reboot clears it immediately.
+That is also a dma-fence contract violation: a fence must always be
+signalled, with an error if necessary.
+
+Lower the class gate to NV50_CHANNEL_GPFIFO. The nvkm side is already
+class neutral: the KILLED case hangs the notifier on runl->chid->event,
+which every fifo owns since the runlist rework, and nvkm_uchan_uevent()
+does not discriminate by class. Pre-NV50 chips keep the old behaviour,
+so NV04 to NV40 are unaffected.
+
+Assisted-by: Claude:claude-opus-5
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+---
+ drivers/gpu/drm/nouveau/nouveau_chan.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/nouveau/nouveau_chan.c b/drivers/gpu/drm/nouveau/nouveau_chan.c
+index 40f134b860a7..b05562545f3c 100644
+--- a/drivers/gpu/drm/nouveau/nouveau_chan.c
++++ b/drivers/gpu/drm/nouveau/nouveau_chan.c
+@@ -485,7 +485,7 @@ nouveau_channel_init(struct nouveau_channel *chan, u32 vram, u32 gart)
+ 	 * lock and the pending list, so an event arriving in between would
+ 	 * find a non-NULL but unusable context and walk a NULL list head.
+ 	 */
+-	if (chan->user.oclass >= FERMI_CHANNEL_GPFIFO) {
++	if (chan->user.oclass >= NV50_CHANNEL_GPFIFO) {
+ 		DEFINE_RAW_FLEX(struct nvif_event_v0, args, data,
+ 				sizeof(struct nvif_chan_event_v0));
+ 		struct nvif_chan_event_v0 *host =
+-- 
+2.54.0
+

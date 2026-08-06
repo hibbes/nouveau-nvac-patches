@@ -1,0 +1,40 @@
+Both findings are correct, thank you.
+
+I checked them against mainline rather than against my downstream tree:
+
+1) nouveau_channel_del() frees the fence context first and only drops the
+   kill subscription later, among the nvif object teardown calls. The
+   subscribed handler reaches nouveau_fence_context_kill(chan->fence), so
+   a kill delivered in that window takes fctx->lock and walks
+   fctx->pending on a context that context_del() has already freed.
+
+2) nouveau_channel_init() arms the subscription right after mapping userd
+   and creates the fence context at the end of the same function. The
+   backends publish the pointer before the context is usable:
+
+	fctx = chan->fence = kzalloc_obj(*fctx);
+	if (!fctx)
+		return -ENOMEM;
+
+	nouveau_fence_context_new(chan, &fctx->base);
+
+   and it is nouveau_fence_context_new() that runs spin_lock_init(&fctx->lock)
+   and INIT_LIST_HEAD(&fctx->pending). The NULL check in
+   nouveau_channel_kill() does not cover that window: chan->fence is
+   non-NULL and unusable, so the handler locks something that was never
+   initialised and walks a list head whose next pointer is still the NULL
+   left by kzalloc().
+
+Both are unreachable below Fermi today, which is exactly why they belong
+in this series: 2/3 lowers the gate to NV50 and 3/3 adds the caller that
+kills Tesla channels. This series is what makes them reachable, so
+shipping it without them would trade a recoverable fault for a
+use-after-free.
+
+I should have carried the first one from the start. It has been running
+on the reference machine since 2026-07-25, and my v2 cover letter
+described that same ordering and then dismissed it as "most of that
+window is harmless". That judgement was wrong.
+
+v3 will put both in front of the subscription change, as 1/5 and 2/5,
+with the remaining three unchanged apart from the rebase.
