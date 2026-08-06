@@ -1,6 +1,6 @@
-From a4adf347356c0269225627115d112e66d473a03c Mon Sep 17 00:00:00 2001
+From 972c6840ec7d4ff9c13f29af22503846d35866d8 Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
-Date: Thu, 6 Aug 2026 11:45:43 +0200
+Date: Thu, 6 Aug 2026 12:09:52 +0200
 Subject: [PATCH v3 0/5] drm/nouveau: nv04 FIFO cleanup + recovery for Tesla
 
 v2 of this series is here:
@@ -249,11 +249,11 @@ Marek Czernohous (5):
  drivers/gpu/drm/nouveau/nouveau_drm.c         |  29 +++
  .../gpu/drm/nouveau/nvkm/engine/fifo/Kbuild   |   1 +
  .../gpu/drm/nouveau/nvkm/engine/fifo/base.c   |   3 +
- .../gpu/drm/nouveau/nvkm/engine/fifo/chan.c   |  14 ++
+ .../gpu/drm/nouveau/nvkm/engine/fifo/chan.c   |  26 +++
  .../gpu/drm/nouveau/nvkm/engine/fifo/nv04.c   |  29 ++-
  .../gpu/drm/nouveau/nvkm/engine/fifo/priv.h   |  10 +
  .../drm/nouveau/nvkm/engine/fifo/recover.c    | 176 ++++++++++++++++++
- 10 files changed, 387 insertions(+), 29 deletions(-)
+ 10 files changed, 399 insertions(+), 29 deletions(-)
  create mode 100644 drivers/gpu/drm/nouveau/include/trace/events/nouveau_fifo.h
  create mode 100644 drivers/gpu/drm/nouveau/nvkm/engine/fifo/recover.c
 

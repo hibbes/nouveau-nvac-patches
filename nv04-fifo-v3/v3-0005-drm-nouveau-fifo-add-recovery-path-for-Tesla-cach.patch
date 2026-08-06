@@ -1,4 +1,4 @@
-From a4adf347356c0269225627115d112e66d473a03c Mon Sep 17 00:00:00 2001
+From 972c6840ec7d4ff9c13f29af22503846d35866d8 Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
 Date: Mon, 4 May 2026 16:30:00 +0200
 Subject: [PATCH v3 5/5] drm/nouveau/fifo: add recovery path for Tesla
@@ -31,8 +31,11 @@ implements two tiers:
 
 The per-channel streak is keyed on the channel object pointer, which is
 used purely as an identity token and never dereferenced. It is dropped
-in nvkm_chan_del() so that a channel id handed out again cannot inherit
-the streak of its predecessor.
+in nvkm_chan_del(), after nvkm_chid_put() has taken the id out of the
+chid map, so that a channel id handed out again cannot inherit the
+streak of its predecessor.  The ordering matters: before that point the
+recovery path can still look the channel up and would re-arm the slot
+with a pointer that is about to be freed.
 
 nvkm_chan_error() is called with preempt=false. nv50 and g84 channels
 have no .preempt callback, so preempt=true would dereference a NULL
@@ -46,11 +49,11 @@ Signed-off-by: Marek Czernohous <marek@czernohous.de>
  drivers/gpu/drm/nouveau/nouveau_drm.c         |  29 +++
  .../gpu/drm/nouveau/nvkm/engine/fifo/Kbuild   |   1 +
  .../gpu/drm/nouveau/nvkm/engine/fifo/base.c   |   3 +
- .../gpu/drm/nouveau/nvkm/engine/fifo/chan.c   |  14 ++
+ .../gpu/drm/nouveau/nvkm/engine/fifo/chan.c   |  26 +++
  .../gpu/drm/nouveau/nvkm/engine/fifo/nv04.c   |   4 +
  .../gpu/drm/nouveau/nvkm/engine/fifo/priv.h   |  10 +
  .../drm/nouveau/nvkm/engine/fifo/recover.c    | 176 ++++++++++++++++++
- 9 files changed, 326 insertions(+)
+ 9 files changed, 338 insertions(+)
  create mode 100644 drivers/gpu/drm/nouveau/include/trace/events/nouveau_fifo.h
  create mode 100644 drivers/gpu/drm/nouveau/nvkm/engine/fifo/recover.c
 
@@ -262,16 +265,29 @@ index 9dd924694306..a61183fa38af 100644
  	return nvkm_engine_ctor(&nvkm_fifo, device, type, inst, true, &fifo->engine);
  }
 diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/chan.c b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/chan.c
-index 418a8918bcb8..79774c6460f4 100644
+index 418a8918bcb8..c4eb087069a8 100644
 --- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/chan.c
 +++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/chan.c
-@@ -275,6 +275,20 @@ nvkm_chan_del(struct nvkm_chan **pchan)
+@@ -275,7 +275,33 @@ nvkm_chan_del(struct nvkm_chan **pchan)
  	nvkm_gpuobj_del(&chan->ramfc);
  
  	if (chan->cgrp) {
 +		struct nvkm_fifo *fifo = chan->cgrp->runl->fifo;
 +
-+		/* Drop this channel's fault streak before the id is reused. */
+ 		nvkm_chid_put(chan->cgrp->runl->chid, chan->id, &chan->cgrp->lock);
++
++		/*
++		 * Drop this channel's fault streak, after the id is gone from the
++		 * chid map.  Doing it earlier would race nv04_fifo_recover():
++		 * until nvkm_chid_put() clears the slot the channel can still be
++		 * looked up, and the recovery path would re-arm cf->owner with a
++		 * pointer that is about to be freed, which a channel allocated
++		 * later at the same address would then match.  nvkm_chid_put()
++		 * takes cgrp->lock, which nvkm_chan_get_chid() holds until
++		 * nvkm_chan_put(), so once it has returned no such lookup can be
++		 * in flight.  It leaves chan->id alone, so the slot is still
++		 * addressable here.
++		 */
 +		if (chan->id >= 0) {
 +			typeof(&fifo->wedge.chfault[0]) cf =
 +				&fifo->wedge.chfault[chan->id % NVKM_FIFO_KILL_CHID_MAX];
@@ -283,9 +299,9 @@ index 418a8918bcb8..79774c6460f4 100644
 +			spin_unlock_irqrestore(&fifo->wedge.lock, flags);
 +		}
 +
- 		nvkm_chid_put(chan->cgrp->runl->chid, chan->id, &chan->cgrp->lock);
  		nvkm_cgrp_unref(&chan->cgrp);
  	}
+ 
 diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c
 index fa13cd55b593..cb81941ecccd 100644
 --- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c
