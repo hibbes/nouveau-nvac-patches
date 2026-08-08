@@ -121,7 +121,8 @@ What went wrong in v1, and how v2 addresses it:
 Testing
 
   Reference hardware: Apple Mac mini Late 2009, MCP79 / GeForce 9400M
-  (NVAC), Core 2 Duo, Wayland (labwc) on Mesa 26.0.8.
+  (NVAC), Core 2 Duo, Wayland (labwc) on Mesa 26.0.8, which is the version
+  the tests below were run against.
 
   Fault injection. I restored the debugfs-style fault injector I used for the
   original validation (as a pair of write-only module parameters this time)

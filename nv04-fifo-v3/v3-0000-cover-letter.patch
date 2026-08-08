@@ -1,6 +1,6 @@
 From 972c6840ec7d4ff9c13f29af22503846d35866d8 Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
-Date: Thu, 6 Aug 2026 13:30:42 +0200
+Date: Sat, 8 Aug 2026 11:49:35 +0200
 Subject: [PATCH v3 0/5] drm/nouveau: nv04 FIFO cleanup + recovery for Tesla
 
 v2 of this series is here:
@@ -126,7 +126,8 @@ What went wrong in v1, and how v2 addresses it:
 Testing
 
   Reference hardware: Apple Mac mini Late 2009, MCP79 / GeForce 9400M
-  (NVAC), Core 2 Duo, Wayland (labwc) on Mesa 26.0.8.
+  (NVAC), Core 2 Duo, Wayland (labwc) on Mesa 26.0.8, which is the version
+  the tests below were run against.
 
   Fault injection. I restored the debugfs-style fault injector I used for the
   original validation (as a pair of write-only module parameters this time)
