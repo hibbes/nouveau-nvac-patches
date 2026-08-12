@@ -34,9 +34,10 @@ and 4/4 no longer says the fences time out, because they cannot.
 
 3/4 downgrades one specific CACHE_ERROR to debug level. Mesa's NV50 bind
 probe writes a known method and data pattern that the hardware rejects,
-once per session start, and nouveau has been reporting it at error level
-ever since. It changes no behaviour beyond the log level and is unrelated
-to the two fixes above; it has simply travelled with them since v2.
+repeatedly over the life of a session, and nouveau has been reporting it at
+error level ever since. It changes no behaviour beyond the log level and is
+unrelated to the two fixes above; it has simply travelled with them since
+v2.
 
 4/4 lowers the channel-kill subscription from FERMI_CHANNEL_GPFIFO to
 NV50_CHANNEL_GPFIFO. On its own it changes no observable behaviour, because
@@ -50,7 +51,7 @@ What is not in this posting, and why
 
   v2 carried a third patch, the recovery path for Tesla cache_error and
   dma_pusher faults, and the five-patch v3 I had prepared carried it as 5/5.
-  It is in neither posting now, and the bot's third finding is not the reason:
+  It is not in this posting, and the bot's third finding is not the reason:
   that one was a real bug of mine and is fixed.
 
   I ran an adversarial review over the whole series before sending, and it
@@ -104,15 +105,14 @@ Testing
   reproduction I do not have.
 
   3/4 filters a benign CACHE_ERROR that Mesa's NV50 bind probe triggers. The
-  logs behind it are from a second, independent MCP79/MCP7A machine, not mine:
-  99 occurrences across three logs and two kernel versions, under Xorg and
-  Wayland, with kwin and plasmashell named as the faulting clients. They were
-  shared with me
-  by the tester who reported the original NVAC issue. I have deliberately not
-  named them here and have not added a Reported-by or Tested-by without asking
-  first; I will add one if they would like it. On my own machine the filter
-  went in before the persistent logging did, so I cannot show a clean before
-  and after from here.
+  logs behind it are from a second, independent MCP79/MCP7A machine, not
+  mine: 99 occurrences across three logs and two kernel versions, under Xorg
+  and Wayland, with kwin and plasmashell named as the faulting clients. They
+  were shared with me by the tester who reported the original NVAC issue. I
+  have deliberately not named them here and have not added a Reported-by or
+  Tested-by without asking first; I will add one if they would like it. On
+  my own machine the filter went in before the persistent logging did, so I
+  cannot show a clean before and after from here.
 
 AI assistance
 
