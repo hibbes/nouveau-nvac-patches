@@ -109,8 +109,8 @@ Testing
   mine: 99 occurrences across three logs and two kernel versions, under Xorg
   and Wayland, with kwin and plasmashell named as the faulting clients. They
   were shared with me by the tester who reported the original NVAC issue. I
-  have deliberately not named them here and have not added a Reported-by or
-  Tested-by without asking first; I will add one if they would like it. On
+  have not named them and have added no Reported-by or Tested-by: we have
+  not been in touch since then, so I have nobody's consent to point at. On
   my own machine the filter went in before the persistent logging did, so I
   cannot show a clean before and after from here.
 
