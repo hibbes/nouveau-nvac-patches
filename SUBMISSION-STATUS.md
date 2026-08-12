@@ -12,7 +12,7 @@ Anubis blockiert ist).
 | 2 | nv04-FIFO v1 (0004, 0006) | **zurückgezogen** 25.07. |
 | 3 | nv04-FIFO v2 (3 Patches) | **gesendet** 06.08., keine Reaktion |
 | 4 | forcedeth (netdev) | fertig, **nicht gesendet**, `Fixes:` fehlt |
-| 5 | nv04-FIFO v3 (5 Patches) | fertig, **bewusst zurückgehalten**, siehe unten |
+| 5 | nv04-FIFO v3 (5 Patches) | **versandbereit** seit 12.08., Sperrgrund entfallen |
 
 Alle vier gesendeten Threads werden vom Morgen-Briefing gepollt.
 
@@ -96,53 +96,36 @@ for type 'u32 [385]'`). Der Fix ist also nach wie vor einschlägig.
 
 | | |
 |---|---|
-| Status | **fertig geschrieben, bewusst ZURÜCKGEHALTEN** |
+| Status | **VERSANDBEREIT** (Sperrgrund am 12.08. widerlegt) |
 | Umfang | 5 Patches, Quellen in `nv04-fifo-v3/` |
 | Neu gegenüber v2 | 1/5 Unsubscribe vor dem Fence-Kontext, 2/5 Subscribe nach dem Fence-Kontext, 5/5 Streak-Aufräumen nach `nvkm_chid_put()` |
 | Unverändert | 3/5 und 4/5 (nur rebased) |
 
-### Warum sie noch liegt, und was vorher zu tun ist
+### Der Sperrgrund ist am 12.08.2026 widerlegt worden
 
-**Der Cover-Letter enthält eine Aussage, die die Messdaten nicht decken.** Er sagt
-über die Injektionsläufe:
+Sie lag wochenlang, weil vier Injektionsläufe zu belegen schienen, dass ein
+Kanal-Kill den Compositor mitnimmt, sogar bei einem fremden Kanal. **Das war
+falsch zugeschrieben.** Ein ftrace auf `signal:signal_generate` hat den Sender
+benannt: `nouveau-chankill-watch.py`, ein **lokaler Wächter vom 25.07.2026**, der
+auf jede `channel N killed!`-Zeile ein SIGTERM an labwc schickte, ohne den
+Besitzer des Kanals zu prüfen.
 
-> *The killed channel belonged to Xwayland, and in both runs Xwayland and the
-> compositor exited*
+Kontrollmessung mit entschärftem Wächter, gleiche Injektion, Opfer wieder
+surfaceless mit eigenem DRM-Client: labwc-PID unverändert, per `wlopm` noch nach
+100 Sekunden ansprechbar, D-State 0, `dma_fence_default_wait` 0, **null Signale**.
+Der Kill selbst fand nachweislich statt.
 
-Das trifft auf die Läufe 1 und 2 zu, bei denen das Opfer über Xwayland lief. In
-den **Läufen 3 und 4** war das Opfer bewusst `surfaceless` mit **eigenem
-DRM-Client**, also gerade nicht Xwayland. Erwartet war, dass der Kill nur den
-Übeltäter trifft. Tatsächlich riss der Sitzungsabbruch beide Male auch das
-laufende Testskript mit, die Protokolle brechen unmittelbar nach der
-Injektionszeile ab (`injection-run3/4-2026-08-06.log`).
+Vollständige Herleitung, Rohdaten und die Lehre daraus:
+[`docs/2026-08-12-chankill-watch-fehlzuschreibung.md`](docs/2026-08-12-chankill-watch-fehlzuschreibung.md).
 
-**Das heißt: der Kanal-Kill nimmt den Compositor auch dann mit, wenn der
-getötete Kanal einem völlig unbeteiligten Prozess gehört.** Das ist ein deutlich
-schlechterer Handel als der, den der Cover beschreibt, und genau der Punkt, an
-dem Reviewer zu Recht einhaken würden.
+**Der Cover-Letter ist entsprechend korrigiert** (Commit siehe unten): der Absatz
+über den Wirkungsradius nennt jetzt die Fehlzuschreibung offen, zeigt den
+ftrace-Auszug und die Kontrollmessung, und schließt mit "only the faulting client
+dies". Das ist für die Serie eine deutlich stärkere Aussage als die alte.
 
-**Was wir wissen und was nicht.** Das labwc-Log von Lauf 4 (`/var/log/labwc.log`,
-06.08. um 14:59:48) zeigt: die Clients melden alle `Connection reset by peer`,
-labwc' Socket war also schon weg, als sie es merkten. labwc selbst zeigt **keinen
-Fehler**, sondern die geordnete Abbau-Sequenz (`Handle destruction of output
-DP-1`, `Destroying wlr_drm_lease_device_v1 for /dev/dri/card0`). Es beendet sich
-**sauber**. Wer es beendet, ist unbekannt.
-
-**Vor dem Versand nötig, in dieser Reihenfolge:**
-
-1. **Herausfinden, was labwc beendet.** Signal-Tracing auf den labwc-Prozess
-   während einer Injektion. Das ist eine abgegrenzte Aufgabe, keine Forschung.
-   Ergebnis entscheidet alles Weitere: ist es ein Kernel-seitiger Abriss, gehört
-   das in den Cover als bekannter Preis; ist es ein labwc- oder seatd-Verhalten,
-   gehört es benannt und der Serie nicht angelastet.
-2. **Den falschen Satz im Cover ersetzen** durch die belegte Fassung: der
-   Compositor geht auch bei einem fremden Kanal mit, vier Läufe, zweimal mit
-   unbeteiligtem DRM-Client.
-3. Erst dann senden.
-
-Die Serie ohne Schritt 1 zu schicken hieße, den zentralen Verkaufspunkt ("wir
-tauschen einen unrettbaren Freeze gegen einen neu gestarteten Client") mit einer
-Beobachtung zu unterlegen, die ihn nicht trägt.
+**Damit ist v3 versandbereit.** Vor dem Absenden nur noch die übliche Routine:
+Betreff und Empfänger prüfen, `git send-email --dry-run`, Volltext gegenlesen,
+dann Freigabe einholen.
 
 ## Nie eingereicht
 

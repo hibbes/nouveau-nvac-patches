@@ -121,8 +121,9 @@ What went wrong in v1, and how v2 addresses it:
 Testing
 
   Reference hardware: Apple Mac mini Late 2009, MCP79 / GeForce 9400M
-  (NVAC), Core 2 Duo, Wayland (labwc) on Mesa 26.0.8, which is the version
-  the tests below were run against.
+  (NVAC), Core 2 Duo, Wayland (labwc). The injection runs quoted below were
+  made on Mesa 26.0.8; the blast-radius control described further down was
+  repeated on 26.1.6 after a routine upgrade, with the same result.
 
   Fault injection. I restored the debugfs-style fault injector I used for the
   original validation (as a pair of write-only module parameters this time)
@@ -151,13 +152,29 @@ Testing
     dma_fence_default_wait and no TTM worker was left in D state, where the
     unpatched freeze left twelve, and the display commit never had to fall
     back to any timeout. The GPU never parked in any of these runs.
-  - What does not survive is the client, and that is worth stating plainly.
-    The killed channel belonged to Xwayland, and in both runs Xwayland and
-    the compositor exited; the session came back about fifteen seconds
-    later. That is the trade this series makes. Before 2/3 the same fault
-    left the desktop frozen on fences that were never signalled, with
-    nothing to do but wait minutes or reboot. With it the affected clients
-    die and are restarted, and the kernel side stays clean.
+  - The blast radius is limited to the faulting client. I have to correct
+    an earlier reading of my own here. In four runs during 2026-08 the
+    Wayland compositor exited along with the victim, and I had written that
+    up as the trade this series makes. That attribution was wrong. A local
+    watchdog of mine, installed 2026-07-25 and unrelated to the kernel,
+    matched every "channel N killed!" line in the ring buffer and SIGTERM'd
+    the compositor on each one, regardless of which process owned the dying
+    channel. An ftrace on signal:signal_generate identified it directly:
+
+      fbo-stress-82575  signal_generate: sig=11 code=1 comm=fbo-stress pid=82575
+      python3-5378      signal_generate: sig=15 code=0 comm=labwc      pid=4141
+
+    sig=15 with code=0 is SI_USER, i.e. a deliberate kill(2) from user
+    space, and pid 5378 was that watchdog.
+
+    With the watchdog disabled and the same injection repeated, the killed
+    channel again belonging to an unrelated surfaceless GL process, the
+    compositor was untouched: same pid before and after, still answering on
+    the Wayland socket 100 seconds later, no task in D state, no worker in
+    dma_fence_default_wait, and not a single signal delivered to the
+    compositor or to Xwayland. Before 2/5 the same fault left the desktop
+    frozen on fences that were never signalled, with nothing to do but wait
+    minutes or reboot. With it, only the faulting client dies.
   - The victim process died with a SIGSEGV inside libgallium. That is the
     known Mesa nv50 limitation (no GL robustness on this generation), not a
     consequence of these patches.
