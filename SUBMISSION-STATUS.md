@@ -12,7 +12,7 @@ Anubis blockiert ist).
 | 2 | nv04-FIFO v1 (0004, 0006) | **zurückgezogen** 25.07. |
 | 3 | nv04-FIFO v2 (3 Patches) | **gesendet** 06.08., keine Reaktion |
 | 4 | forcedeth (netdev) | fertig, **nicht gesendet**, `Fixes:` fehlt |
-| 5 | nv04-FIFO v3 (5 Patches) | **versandbereit** seit 12.08., Sperrgrund entfallen |
+| 5 | nv04-FIFO v3 (5 Patches) | **NICHT senden.** Gegenprüfung 12.08.: 2 echte Codefehler in 5/5 |
 
 Alle vier gesendeten Threads werden vom Morgen-Briefing gepollt.
 
@@ -96,7 +96,7 @@ for type 'u32 [385]'`). Der Fix ist also nach wie vor einschlägig.
 
 | | |
 |---|---|
-| Status | **VERSANDBEREIT** (Sperrgrund am 12.08. widerlegt) |
+| Status | **NICHT SENDEN**, siehe [GEGENPRÜFUNG-2026-08-12.md](nv04-fifo-v3/GEGENPRUEFUNG-2026-08-12.md) |
 | Umfang | 5 Patches, Quellen in `nv04-fifo-v3/` |
 | Neu gegenüber v2 | 1/5 Unsubscribe vor dem Fence-Kontext, 2/5 Subscribe nach dem Fence-Kontext, 5/5 Streak-Aufräumen nach `nvkm_chid_put()` |
 | Unverändert | 3/5 und 4/5 (nur rebased) |
@@ -123,9 +123,40 @@ Vollständige Herleitung, Rohdaten und die Lehre daraus:
 ftrace-Auszug und die Kontrollmessung, und schließt mit "only the faulting client
 dies". Das ist für die Serie eine deutlich stärkere Aussage als die alte.
 
-**Damit ist v3 versandbereit.** Vor dem Absenden nur noch die übliche Routine:
-Betreff und Empfänger prüfen, `git send-email --dry-run`, Volltext gegenlesen,
-dann Freigabe einholen.
+### Aber: die Gegenprüfung vom 12.08. hat zwei ECHTE Codefehler gefunden
+
+Der alte Sperrgrund ist weg, ein neuer ist da. Eine siebenlinsige Prüfung mit
+anschliessender Widerlegung (99 Rohbefunde, 30 eindeutige Probleme, 26
+überstanden) empfiehlt **`groesserer_umbau`**. Vollständig in
+[GEGENPRÜFUNG-2026-08-12.md](nv04-fifo-v3/GEGENPRUEFUNG-2026-08-12.md).
+
+Die beiden Codefehler, beide in 5/5, beide selbst am Quelltext nachgeprüft:
+
+1. **`nv04_fifo_recover()` hat keinen Familien-Guard.** `nv04_fifo_intr` ist
+   `.intr` für sieben Chipfamilien (nv04.c:545, nv10.c:98, nv17.c:127,
+   nv40.c:237, nv50.c:383, g84.c:215, g98.c:54). Das Abo-Gate aus 4/5 steht auf
+   `oclass >= NV50_CHANNEL_GPFIFO`. Auf NV04 bis NV40 feuert die Eskalation also
+   ohne Abnehmer und erzeugt genau den Dead-Letter-Hänger, den 4/5 drei Patches
+   vorher anklagt. Die Serie widerlegt ihre eigene Begründung im selben Diff.
+   Fix: `if (device->card_type != NV_50) return;` am Funktionskopf, eine Stunde.
+
+2. **Use-after-free von `struct nouveau_drm`.** `dev_set_drvdata` steht genau
+   einmal (nouveau_drm.c:773) und wird nie genullt. `nouveau_drm_device_remove`
+   ruft `_del` (:943, `kfree(drm)` bei :743) **vor** `nvkm_device_del` (:944),
+   und das einzige `cancel_work_sync` für das Wedge-Work sitzt in
+   `nvkm_fifo_dtor` (base.c:340 → recover.c:175), läuft also erst in :944. Ein
+   eingereihtes Work liest freigegebenen Speicher und reicht ihn an `dev_info`,
+   den Tracepoint und `drm_dev_wedged_event` weiter. Fix: Tier-2 in die
+   DRM-Schicht heben, das löst zugleich den Schichtungsverstoss.
+
+**Praktischer Weg laut Urteil:** 1/5 bis 4/5 mit korrigierten Commit-Texten und
+`Fixes:`-Tags als geschlossene Viererserie senden (3/5 und 4/5 stehen ohne 5/5
+sauber für sich, 4/5 ist dann ein wohlbegründetes No-op), und 5/5 für v4
+umbauen.
+
+**Und unabhängig davon:** `v3-0000-cover-letter.patch` ist die veraltete Fassung
+und trägt die vom Autor selbst widerlegte Behauptung, der Compositor sterbe mit
+dem Opfer. Diese Datei ginge raus, nicht `v3-cover-body.txt`.
 
 ## Nie eingereicht
 

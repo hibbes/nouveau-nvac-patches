@@ -123,7 +123,9 @@ Testing
   Reference hardware: Apple Mac mini Late 2009, MCP79 / GeForce 9400M
   (NVAC), Core 2 Duo, Wayland (labwc). The injection runs quoted below were
   made on Mesa 26.0.8; the blast-radius control described further down was
-  repeated on 26.1.6 after a routine upgrade, with the same result.
+  made later on 26.1.6, after a routine upgrade. The Mesa version is stated
+  for completeness only, it is not a controlled variable: what differed
+  between those runs was the local watchdog, not Mesa.
 
   Fault injection. I restored the debugfs-style fault injector I used for the
   original validation (as a pair of write-only module parameters this time)
@@ -161,20 +163,23 @@ Testing
     the compositor on each one, regardless of which process owned the dying
     channel. An ftrace on signal:signal_generate identified it directly:
 
-      fbo-stress-82575  signal_generate: sig=11 code=1 comm=fbo-stress pid=82575
+      fbo-stress-76295  signal_generate: sig=11 code=1 comm=fbo-stress pid=76295
       python3-5378      signal_generate: sig=15 code=0 comm=labwc      pid=4141
 
     sig=15 with code=0 is SI_USER, i.e. a deliberate kill(2) from user
-    space, and pid 5378 was that watchdog.
+    space, and pid 5378 was that watchdog. Both lines are from the same
+    run; the first is the victim taking its own SIGSEGV.
 
-    With the watchdog disabled and the same injection repeated, the killed
+    With the watchdog disarmed and the injection repeated, the killed
     channel again belonging to an unrelated surfaceless GL process, the
     compositor was untouched: same pid before and after, still answering on
-    the Wayland socket 100 seconds later, no task in D state, no worker in
-    dma_fence_default_wait, and not a single signal delivered to the
-    compositor or to Xwayland. Before 2/5 the same fault left the desktop
-    frozen on fences that were never signalled, with nothing to do but wait
-    minutes or reboot. With it, only the faulting client dies.
+    the Wayland socket 100 seconds later, no worker in
+    dma_fence_default_wait at any sample, and, over the whole run, exactly
+    one signal in the trace, the victim's own SIGSEGV. Nothing was
+    delivered to the compositor or to Xwayland. Before 2/5 the same fault
+    left the desktop frozen on fences that were never signalled, with
+    nothing to do but wait minutes or reboot. With it, only the faulting
+    client dies.
   - The victim process died with a SIGSEGV inside libgallium. That is the
     known Mesa nv50 limitation (no GL robustness on this generation), not a
     consequence of these patches.
