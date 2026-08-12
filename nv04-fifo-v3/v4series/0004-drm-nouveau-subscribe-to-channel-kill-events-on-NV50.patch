@@ -1,4 +1,4 @@
-From 7a6aee21ac43d2bd4f3eadad17d680d38380524e Mon Sep 17 00:00:00 2001
+From 383f52eff85983699fc4c7e5153c33e69c38d935 Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
 Date: Sat, 25 Jul 2026 20:09:37 +0200
 Subject: [PATCH v3 4/4] drm/nouveau: subscribe to channel-kill events on NV50
@@ -13,10 +13,9 @@ Today that is harmless, because nothing kills a channel on Tesla: the
 only nvkm_chan_error() callers are the Fermi and newer recovery paths.
 So this patch changes no observable behaviour on its own, and that is
 deliberate: it removes a latent trap before anything can fall into it.
-I am carrying a Tesla recovery path that does add such a caller and
-will send it separately once it is ready. Without a subscriber in
-place the consequences there are severe.
-nouveau_channel_killed() never runs, so
+I am carrying a Tesla recovery path that does add such a caller and will
+send it separately once it is ready. Without a subscriber in place the
+consequences there are severe: nouveau_channel_killed() never runs, so
 nouveau_fence_context_kill() never runs either, and the pending fences
 of the killed channel are never signalled. Everything waiting on them
 waits forever: drm_atomic_helper_wait_for_fences() in the display commit

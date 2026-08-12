@@ -17,7 +17,7 @@ More on that below, because the reason is not the bot's finding.
     nouveau_channel_init() subscribes right after mapping userd and creates
     the context at the end of the same function, and the backends publish
     chan->fence from kzalloc() before nouveau_fence_context_new() initialises
-    its lock and pending list. The NULL check in nouveau_channel_killed() does
+    its lock and pending list. The NULL check in nouveau_channel_kill() does
     not cover that: the pointer is non-NULL and unusable.
 
 Both are pre-existing. Both are unreachable below Fermi today, and on Fermi
@@ -27,8 +27,16 @@ the start. The v2 cover letter even described the teardown ordering and
 dismissed it as "most of that window is harmless". That judgement was wrong,
 and I appreciate the catch.
 
-3/4 and 4/4 are unchanged from v2 apart from the rebase and one joined format
-string.
+3/4 and 4/4 are unchanged in code apart from the rebase and one joined format
+string. Both commit messages have been corrected: 3/4 no longer implies a chip
+gate it does not have and no longer claims a before and after I cannot show,
+and 4/4 no longer says the fences time out, because they cannot.
+
+3/4 downgrades one specific CACHE_ERROR to debug level. Mesa's NV50 bind
+probe writes a known method and data pattern that the hardware rejects,
+once per session start, and nouveau has been reporting it at error level
+ever since. It changes no behaviour beyond the log level and is unrelated
+to the two fixes above; it has simply travelled with them since v2.
 
 4/4 lowers the channel-kill subscription from FERMI_CHANNEL_GPFIFO to
 NV50_CHANNEL_GPFIFO. On its own it changes no observable behaviour, because
@@ -40,9 +48,10 @@ into. Removing it before anything can fall in is the right order.
 
 What is not in this posting, and why
 
-  v2 carried a fifth patch, the recovery path for Tesla cache_error and
-  dma_pusher faults. It is not here, and the bot's third finding is not the
-  reason: that one was a real bug of mine and is fixed.
+  v2 carried a third patch, the recovery path for Tesla cache_error and
+  dma_pusher faults, and the five-patch v3 I had prepared carried it as 5/5.
+  It is in neither posting now, and the bot's third finding is not the reason:
+  that one was a real bug of mine and is fixed.
 
   I ran an adversarial review over the whole series before sending, and it
   found two defects in that patch that the bot had not flagged:
@@ -75,12 +84,13 @@ Testing
   the new format strings and the lowered class gate in place. checkpatch.pl
   --strict is clean on all four patches.
 
-  Soak. Code equivalent to 3/4 and 4/4 has been running on that machine since
-  2026-07-25, and equivalent to 2/4 since 2026-08-06, across the kernel bumps
-  7.1.5, 7.1.6, 7.1.7 and 7.1.8. Since every channel now subscribes to the
-  kill event, the interesting long-run question is channel churn, so the soak
-  is ordinary daily driving with a browser and GL applications rather than a
-  synthetic loop. No regression has shown up in that time.
+  Soak. Code equivalent to 1/4, 3/4 and 4/4 has been running on that machine
+  since 2026-07-25, and equivalent to 2/4 since 2026-08-06. The first spans
+  the kernel bumps 7.1.5, 7.1.6, 7.1.7 and 7.1.8, the second only 7.1.7 and
+  7.1.8. Since every channel now subscribes to the kill event, the interesting
+  long-run question is channel churn, so the soak is ordinary daily driving
+  with a browser and GL applications rather than a synthetic loop. No
+  regression has shown up in that time.
 
   What the soak does not show, stated plainly: that tree carries local patches
   this series does not, including a cap on the plane-fence wait in the
@@ -95,8 +105,9 @@ Testing
 
   3/4 filters a benign CACHE_ERROR that Mesa's NV50 bind probe triggers. The
   logs behind it are from a second, independent MCP79/MCP7A machine, not mine:
-  99 occurrences across three kernel versions, under Xorg and Wayland, with
-  kwin and plasmashell named as the faulting clients. They were shared with me
+  99 occurrences across three logs and two kernel versions, under Xorg and
+  Wayland, with kwin and plasmashell named as the faulting clients. They were
+  shared with me
   by the tester who reported the original NVAC issue. I have deliberately not
   named them here and have not added a Reported-by or Tested-by without asking
   first; I will add one if they would like it. On my own machine the filter
@@ -129,5 +140,6 @@ Changes since v2
   - both found by the Sashiko review bot on the v2 posting, confirmed against
     the source before acting on them, and now carrying Fixes: and Cc: stable
   - dropped the Tesla recovery patch, see above
-  - 3/4 and 4/4 unchanged apart from the rebase and one joined format string
+  - 3/4 and 4/4 unchanged in code apart from the rebase and one joined format
+    string, both commit messages corrected for accuracy
   - the series is now built against the base commit

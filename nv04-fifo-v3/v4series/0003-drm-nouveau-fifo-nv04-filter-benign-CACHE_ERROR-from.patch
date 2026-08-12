@@ -1,20 +1,30 @@
-From 2b827e5e4a501ccb449a8b208b1d2191da75b5c5 Mon Sep 17 00:00:00 2001
+From 067f830f93345e4ac7ce0b9ef76bdf97825cb103 Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
 Date: Thu, 9 Apr 2026 20:30:00 +0200
 Subject: [PATCH v3 3/4] drm/nouveau/fifo/nv04: filter benign CACHE_ERROR from
  Mesa NV50 bind probe
 
 The Mesa userspace driver issues a method-0x0060 / data-0xbeef02xx
-binding probe on Tesla GPUs that ends up triggering CACHE_ERROR in the
-PFIFO interrupt handler. The probe is harmless and recovers cleanly,
-but it floods dmesg at error level on every X/Wayland session start.
+binding probe that ends up triggering CACHE_ERROR in the PFIFO
+interrupt handler. The probe is harmless and recovers cleanly, but it
+is reported at error level, so it shows up in dmesg on session start.
 
 Filter that specific pattern down to debug level so dmesg stays clean
 while real CACHE_ERROR conditions are still logged at error level.
 
-Tested on an Apple Mac mini Late 2009 (MCP79, NVAC 0xac080b1): dmesg has
-no CACHE_ERROR spam during normal operation, the previously visible
-beef02xx pattern now only appears at debug level.
+The test is on the method and data pattern alone, not on the chip
+family, so it applies wherever nv04_fifo_intr() is the handler, that is
+nv04 through g98. That is deliberate rather than an oversight: a false
+positive would need userspace to write exactly 0xbeef02xx to method
+0x0060, and the probe itself comes from the shared nouveau Gallium code
+rather than from anything NV50 specific. Say so here so the narrower
+wording of the subject is not read as a chip gate.
+
+Evidence: 99 occurrences across three logs from a second, independent
+MCP79/MCP7A machine running 7.0.10 and 6.12.90, under both Xorg and
+Wayland, with kwin and plasmashell named as the faulting clients. On my
+own reference machine the filter went in before the persistent kernel
+log did, so I cannot show a clean before and after from there.
 
 Assisted-by: Claude:claude-opus-5
 Signed-off-by: Marek Czernohous <marek@czernohous.de>

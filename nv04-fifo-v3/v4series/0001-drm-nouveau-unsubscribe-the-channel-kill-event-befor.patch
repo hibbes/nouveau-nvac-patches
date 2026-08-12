@@ -1,4 +1,4 @@
-From 20dae73743c127711094fa064686feb6305bbdb0 Mon Sep 17 00:00:00 2001
+From d9d43b7d337fb7374a3cd513f82d7fe0cfb5c03d Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
 Date: Thu, 6 Aug 2026 11:31:31 +0200
 Subject: [PATCH v3 1/4] drm/nouveau: unsubscribe the channel-kill event before
@@ -23,10 +23,12 @@ freed.
 Nothing reaches this below Fermi today, because the subscription is
 gated on FERMI_CHANNEL_GPFIFO and nothing kills a channel there. On
 Fermi and newer the window is real but narrow, since a kill has to land
-exactly while the channel is being destroyed. The last patch in this
-series lowers the gate to NV50, which widens the set of channels the
-window applies to, so the ordering is worth fixing first rather than
-alongside.
+exactly while the channel is being destroyed. That is reason enough on
+its own, which is why this carries a Fixes: tag. The last patch in this
+series subscribes Tesla channels as well; nothing kills those today, so
+it does not widen the exposure now, but it is the groundwork for a
+recovery path that would, and the ordering is better fixed before that
+lands than alongside it.
 
 Drop the subscription before anything it depends on is torn down.
 

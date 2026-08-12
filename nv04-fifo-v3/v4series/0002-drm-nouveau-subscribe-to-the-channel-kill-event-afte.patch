@@ -1,4 +1,4 @@
-From f5270cb3ed8f997ea711a3fc7b7f234f4ba6f769 Mon Sep 17 00:00:00 2001
+From 81e0656cfae37847b509a2b4b64c6363ab97509f Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
 Date: Thu, 6 Aug 2026 11:33:17 +0200
 Subject: [PATCH v3 2/4] drm/nouveau: subscribe to the channel-kill event after
@@ -37,8 +37,8 @@ old subscription point and context_new(). What changes is what the
 window costs. Before, a kill landing in it reached a half-built fence
 context; now it is missed, and the channel is left blocked with
 chan->killed still 0, so nouveau_channel_idle() and the checks in
-nouveau_gem_ioctl_pushbuf() and nouveau_exec_job_run() keep treating it
-as alive. The missed-kill window is not introduced by this patch either:
+nouveau_gem_ioctl_pushbuf() and nouveau_exec_ioctl_exec() keep treating
+it as alive. The missed-kill window is not introduced by this patch either:
 nvkm_uchan_init() already calls nvkm_chan_allow() and nvkm_chan_insert(),
 so the channel is schedulable before nouveau_channel_init() subscribes at
 all. Closing it properly means subscribing before the channel becomes
