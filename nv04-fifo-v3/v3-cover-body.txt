@@ -38,11 +38,13 @@ The third was my own bug.
 3/5 and 4/5 are unchanged from v2 apart from the rebase; 5/5 carries the
 ordering fix described above.
 
-The original v1 report follows, since it still explains why 5/5 exists.
+The v2 cover letter follows, since it still explains why 5/5 exists. Its
+patch numbers are the ones it was posted with; the mapping to this series
+is given inline.
 
 What went wrong in v1, and how v2 addresses it:
 
-1) NULL pointer dereference in interrupt context (fixed in 3/3)
+1) NULL pointer dereference in interrupt context (fixed in 3/3, now 5/5)
 
    v1 called nvkm_chan_error(chan, true). nv50 and g84 channels have no
    .preempt callback, and the call in nvkm_chan_error() is guarded only by
@@ -71,7 +73,7 @@ What went wrong in v1, and how v2 addresses it:
    v2 uses preempt=false, which is what the existing caller in
    nvkm_runl_rc() does as well.
 
-2) Killing the channel on the first fault is wrong (fixed in 3/3)
+2) Killing the channel on the first fault is wrong (fixed in 3/3, now 5/5)
 
    v1 killed the channel on every fault. But there is a single PFIFO cache
    puller, and on a fault it names the channel that is *resident*, not
@@ -87,7 +89,7 @@ What went wrong in v1, and how v2 addresses it:
    pointer as an identity token, never dereferenced, and dropped in
    nvkm_chan_del() so a reused channel id cannot inherit it.
 
-3) A killed channel is not survivable on Tesla (new patch 2/3)
+3) A killed channel is not survivable on Tesla (new patch 2/3, now 4/5)
 
    This is the reason for the new patch, and it is the part I would most
    like reviewed.
@@ -98,8 +100,9 @@ What went wrong in v1, and how v2 addresses it:
    runs, and the pending fences of the killed channel are never signalled.
 
    Today that is harmless upstream, because nothing kills a Tesla channel.
-   Patch 3/3 introduces exactly such a caller, so without 2/3 the series
-   would trade a recoverable fault for an unrecoverable hang. On the
+   Patch 3/3 (now 5/5) introduces exactly such a caller, so without 2/3
+   (now 4/5) the series would trade a recoverable fault for an
+   unrecoverable hang. On the
    reference machine this presented twice as a frozen desktop on a machine
    that was otherwise alive and reachable over ssh. The stacks as observed:
 
@@ -111,10 +114,13 @@ What went wrong in v1, and how v2 addresses it:
    The ttm frame is reported as ttm_bo_fini; the wait that actually holds
    those workers is the MAX_SCHEDULE_TIMEOUT one in ttm_bo_delayed_delete,
    which is static and in the same file, so the shortened frame is
-   consistent with inlining. Either way both waits are uninterruptible.
-   The desktop stayed frozen for minutes until the fences timed out, after
-   which a compositor respawn brought the display back; a reboot cleared it
-   immediately. Leaving a fence unsignalled also violates the dma-fence
+   consistent with inlining. Either way both waits are uninterruptible, and
+   neither can time out: both pass MAX_SCHEDULE_TIMEOUT. What ended the
+   freeze was therefore not a timeout but the compositor exiting. Closing
+   its fd tears the channel down, and nouveau_fence_context_del() signals
+   the pending fences on the way out, after which the respawned session had
+   a working display again. A reboot clears it for the same reason, just
+   sooner. Leaving a fence unsignalled also violates the dma-fence
    contract, which is why I think the subscription belongs on NV50+ even
    independently of this series.
 
@@ -149,7 +155,7 @@ Testing
   - A fault 18 seconds after the previous one counted as 1/3 again, so the
     window expiry works.
   - The "channel N killed!" line is the one that never appeared before patch
-    2/3. It proves the event is delivered and the fences of the killed
+    2/3, now 4/5. It proves the event is delivered and the fences of the killed
     channel are signalled: across two runs no kworker ended up in
     dma_fence_default_wait and no TTM worker was left in D state, where the
     unpatched freeze left twelve, and the display commit never had to fall
@@ -191,20 +197,30 @@ Testing
 
   Soak. The v1 patches ran on that machine from 2026-05 onwards, which is how
   defects 1 and 2 were found. The v2 code, including the escalation ladder and
-  the widened event subscription, has been running since 2026-07-25, twelve
-  days as of this posting, across a kernel bump from 7.1.5 to 7.1.6 with the patch
-  series unchanged. Since every channel now subscribes to the kill event, the
-  interesting long-run question is channel churn, so the soak is ordinary
-  daily driving with a browser and GL applications rather than a synthetic
-  loop.
+  the widened event subscription, has been running since 2026-07-25, and the
+  two changes that are new in v3 (the subscription move and the reordered
+  streak cleanup) since 2026-08-06, across the kernel bumps 7.1.5, 7.1.6,
+  7.1.7 and 7.1.8 with the series otherwise unchanged. Since every channel now
+  subscribes to the kill event, the interesting long-run question is channel
+  churn, so the soak is ordinary daily driving with a browser and GL
+  applications rather than a synthetic loop.
 
-  One difference between the soaked code and the diff below, stated so it is
-  not a surprise: downstream I carry the widened subscription behind a
-  module parameter (default on) so I can fall back to the Fermi+ behaviour
-  without rebuilding. Patch 2/3 as posted does it unconditionally. At the
-  default the two are behaviourally identical, and that default is what ran
-  for those twelve days; the parameter itself is a local debugging aid and I did
-  not think it belonged upstream.
+  What the soak does not show, stated plainly: since 2026-07-25 that same tree
+  also carries a downstream-only cap on the plane-fence wait in the
+  nonblocking commit tail, default 10 s, where upstream waits forever. Both
+  freeze observations quoted above predate it and are unaffected, but a
+  recurrence during the soak would have been bounded rather than indefinite.
+  The soak therefore says the series does not misbehave in daily use; it does
+  not independently re-demonstrate the unbounded wait.
+
+  Differences between the soaked code and the diff below, stated so they are
+  not a surprise. Downstream I carry the widened subscription behind a module
+  parameter (default on) so I can fall back to the Fermi+ behaviour without
+  rebuilding; patch 4/5 as posted does it unconditionally, and at the default
+  the two are behaviourally identical. The escalation thresholds are module
+  parameters downstream and plain constants here. The plane-fence cap named
+  above is downstream-only and not part of this series, as is the fault
+  injector used for the tests above. None of the four belongs upstream.
 
   Compile coverage, precisely: the changed translation units build clean in a
   downstream 7.1.6 tree that carries equivalent code. The series is rebased
@@ -212,7 +228,7 @@ Testing
   my mainline checkout is sparse. The full module, in the downstream form, is
   built and booted on the reference machine.
 
-  A note on MAINTAINERS. Patch 3/3 adds a new file
+  A note on MAINTAINERS. Patch 5/5 adds a new file
   drivers/gpu/drm/nouveau/nvkm/engine/fifo/recover.c. The change is covered
   by the existing nouveau MAINTAINERS section (drivers/gpu/drm/nouveau/),
   so no MAINTAINERS update is included. checkpatch.pl flags this as a hint;
@@ -223,7 +239,7 @@ AI assistance
   Lyude asked on the v1 thread whether these patches were written by a human
   and pointed at Documentation/process/coding-assistants.rst. The answer,
   repeated here for the archive: this work is AI assisted. I use Claude
-  (claude-opus-4-7 for v1, claude-opus-5 for v2) as a coding and analysis
+  (claude-opus-4-7 for v1, claude-opus-5 for v2 and v3) as a coding and analysis
   assistant. Every patch carries an Assisted-by trailer accordingly, and no
   Signed-off-by is added by the tool.
 
@@ -238,14 +254,6 @@ AI assistance
   adversarially, which is how defects 2 and 3 were found. I reviewed the
   result, I understand the code, and I take responsibility for it.
 
-  One consequence worth stating: a first draft of this cover letter
-  described the fence-context teardown ordering in nouveau_channel_del() as
-  a use-after-free worth its own patch. On closer inspection most of that
-  window is harmless, because nouveau_fence_context_del() empties the
-  pending list before the event is unsubscribed. I dropped that patch rather
-  than send an overstated claim. If you would still like the reordering as a
-  hardening change, I can send it separately.
-
 Changes since v2
 
   - new 1/5: unsubscribe the channel-kill event before the fence context
@@ -257,7 +265,7 @@ Changes since v2
     confirmed before acting on them
   - 3/5 and 4/5 unchanged from v2 apart from the rebase
 
-Changes since v1
+Changes since v1 (patch numbers as posted in v2)
 
   - new patch 2/3 (subscribe to channel-kill events on NV50+)
   - 3/3: preempt=false instead of preempt=true
