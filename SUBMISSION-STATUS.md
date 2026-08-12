@@ -12,7 +12,8 @@ Anubis blockiert ist).
 | 2 | nv04-FIFO v1 (0004, 0006) | **zurückgezogen** 25.07. |
 | 3 | nv04-FIFO v2 (3 Patches) | **gesendet** 06.08., keine Reaktion |
 | 4 | forcedeth (netdev) | fertig, **nicht gesendet**, `Fixes:` fehlt |
-| 5 | nv04-FIFO v3 (5 Patches) | **NICHT senden.** Gegenprüfung 12.08.: 2 echte Codefehler in 5/5 |
+| 5 | nv04-FIFO v3, **Viererserie** | **GESENDET 13.08.2026 01:13**, 5x SMTP 250 |
+| 6 | Tesla-Recovery (ex 5/5) | zurückgestellt für v4, zwei Codefehler, siehe unten |
 
 Alle vier gesendeten Threads werden vom Morgen-Briefing gepollt.
 
@@ -96,7 +97,19 @@ for type 'u32 [385]'`). Der Fix ist also nach wie vor einschlägig.
 
 | | |
 |---|---|
-| Status | **NICHT SENDEN**, siehe [GEGENPRÜFUNG-2026-08-12.md](nv04-fifo-v3/GEGENPRUEFUNG-2026-08-12.md) |
+| Status | **GESENDET 2026-08-13 01:13 CEST als Viererserie** |
+| Betreff | `[PATCH v3 0/4] drm/nouveau: channel-kill event ordering fixes, and lower the gate to NV50` |
+| Message-ID | `20260812231330.705425-1-mczernohous@gmail.com` |
+| SMTP | 5x Result 250 (Cover plus vier Patches) |
+| Basis | `c21bb4193868` |
+| Empfänger | nouveau, dri-devel, lkml, dazu Krummrich, Lyude, Airlie, Vetter und **Skeggs über bskeggs@nvidia.com** |
+| Quellen | `nv04-fifo-v3/v4series/` |
+
+**Zum Beobachten:** der Thread gehört ins Morgen-Briefing, Baseline 5 Mails, alle
+vom 13.08. Beim Juni-Versand meldete sich `sashiko-bot@kernel.org` 13 Minuten
+nach dem Send. Achtung bei der Suche: Message-ID läuft über die **Gmail**-Adresse.
+
+Der Tesla-Recovery-Patch ist NICHT dabei, siehe unten.
 | Umfang | 5 Patches, Quellen in `nv04-fifo-v3/` |
 | Neu gegenüber v2 | 1/5 Unsubscribe vor dem Fence-Kontext, 2/5 Subscribe nach dem Fence-Kontext, 5/5 Streak-Aufräumen nach `nvkm_chid_put()` |
 | Unverändert | 3/5 und 4/5 (nur rebased) |
