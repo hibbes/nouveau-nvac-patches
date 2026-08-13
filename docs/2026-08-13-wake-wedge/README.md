@@ -58,3 +58,29 @@ abgeschnittene Sequenzen sein. Vor weiteren Schlüssen den Parser härten.
 
 `state.txt`, `supervisor-trace.txt`, `wedge-20260813T124036-watchdog.txt`,
 `kernlog-snapshot.txt` in diesem Verzeichnis.
+
+## Nachtrag: Mitschnitt eines passiven Beobachters
+
+`bar0-passiv-nach-erholung.txt` lag als ungetrackte, root-eigene Datei unter
+`docs/specs/` mit einem irrefuehrenden Namen (Juni-Datum im Dateinamen,
+Inhalt vom 13.08.). Sie stammt von einem passiven Waechter, der ausdruecklich
+nicht eingreift, und wurde um **12:41:20** geschrieben, also **eine Sekunde
+nach dem Resume** der S3-Erholung.
+
+Sie zeigt deshalb nicht den Wedge, sondern den geheilten Zustand danach: alle
+acht `ctrl`-Register mit `busy(bit31)=0`, und die Kanaele wieder synchron
+(ch0 GET=PUT=0x2f4, ch2 GET=PUT=0x434). Als Gegenprobe zum Wedge-Abzug des
+S3-Waechters von 12:40:36 (`core=8f0e001b base1=8e07001b`, beide mit Bit31,
+GET hinter PUT) ist sie trotzdem nuetzlich: sie belegt, dass der S3-Zyklus
+beide Auffaelligkeiten zugleich aufgeloest hat.
+
+Die Kopfzeile des Beobachters traegt ausserdem seine eigene Faustregel:
+
+```
+busy=1 (0x80000000)      => HW-latched/irreversible
+busy=0 + GET!=PUT        => ring desync => healable via fini/init
+```
+
+Ungeprueft. Sie stammt aus einem lokalen Skript, nicht aus der Doku, und
+gehoert bei Gelegenheit gegen die Quelle gestellt, bevor sie irgendwo
+zitiert wird.
