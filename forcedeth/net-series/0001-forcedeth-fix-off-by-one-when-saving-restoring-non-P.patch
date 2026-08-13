@@ -1,0 +1,83 @@
+From 486e6cf6bbd194e112de829683fb17f7f0206879 Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
+Date: Thu, 13 Aug 2026 15:09:56 +0200
+Subject: [PATCH net 1/2] forcedeth: fix off-by-one when saving/restoring
+ non-PCI config space
+
+nv_suspend() and nv_resume() walk the non-PCI configuration space with
+
+	for (i = 0; i <= np->register_size/sizeof(u32); i++)
+
+which runs one iteration too many. saved_config_space is declared as
+
+	u32 saved_config_space[NV_PCI_REGSZ_MAX/4];
+
+and NV_PCI_REGSZ_VER3 is equal to NV_PCI_REGSZ_MAX (0x604), so on a VER3
+device register_size/sizeof(u32) is exactly the array length and the last
+iteration addresses one element past the end.
+
+On suspend that reads one register beyond the claimed window and stores
+the value out of bounds, over whatever member of struct fe_priv follows
+the array. On resume it reads out of bounds and writel()s the result to
+base + 0x604, one dword past the register range the driver asked for.
+
+VER1 and VER2 devices stay inside the array, but they too get the stray
+read and the stray write one dword past their own window.
+
+Caught by UBSAN on an MCP79 (Apple Mac mini 3,1, GeForce 9400M IGP)
+during a deep S3 cycle:
+
+  UBSAN: array-index-out-of-bounds in drivers/net/ethernet/nvidia/forcedeth.c:6225:25
+  index 385 is out of range for type 'u32 [385]'
+  CPU: 1 UID: 0 PID: 21996 Comm: kworker/u8:31 Tainted: G S         OE       7.1.6
+  Hardware name: Apple Inc. Macmini3,1/Mac-F22C86C8
+  Call Trace:
+   dump_stack_lvl+0x5d/0x80
+   ubsan_epilogue+0x5/0x2b
+   __ubsan_handle_out_of_bounds.cold+0x54/0x59
+   __this_module+0xe398c/0xe9010 [forcedeth]
+   pci_pm_suspend+0x80/0x170
+   dpm_run_callback+0x51/0x160
+   device_suspend+0x1a2/0x4a0
+
+The splat fires once per loop, so twice per suspend/resume cycle. That
+still holds on 7.1.8: a single S3 cycle on the same machine reports
+:6225 from pci_pm_suspend and :6240 from pci_pm_resume, naming both
+loops, with the same "index 385 is out of range for type 'u32 [385]'".
+
+Use < instead of <=, which saves and restores exactly register_size
+bytes. No functional change beyond dropping the extra register.
+
+Fixes: 1a1ca86158ee ("[netdrvr] forcedeth: save/restore device configuration space")
+Cc: stable@vger.kernel.org
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+Assisted-by: Claude:claude-opus-5
+---
+ drivers/net/ethernet/nvidia/forcedeth.c | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/net/ethernet/nvidia/forcedeth.c b/drivers/net/ethernet/nvidia/forcedeth.c
+index 58d3e55def48..dc804e111564 100644
+--- a/drivers/net/ethernet/nvidia/forcedeth.c
++++ b/drivers/net/ethernet/nvidia/forcedeth.c
+@@ -6221,7 +6221,7 @@ static int nv_suspend(struct device *device)
+ 	netif_device_detach(dev);
+ 
+ 	/* save non-pci configuration space */
+-	for (i = 0; i <= np->register_size/sizeof(u32); i++)
++	for (i = 0; i < np->register_size/sizeof(u32); i++)
+ 		np->saved_config_space[i] = readl(base + i*sizeof(u32));
+ 
+ 	return 0;
+@@ -6236,7 +6236,7 @@ static int nv_resume(struct device *device)
+ 	int i, rc = 0;
+ 
+ 	/* restore non-pci configuration space */
+-	for (i = 0; i <= np->register_size/sizeof(u32); i++)
++	for (i = 0; i < np->register_size/sizeof(u32); i++)
+ 		writel(np->saved_config_space[i], base+i*sizeof(u32));
+ 
+ 	if (np->driver_data & DEV_NEED_MSI_FIX)
+-- 
+2.54.0
+

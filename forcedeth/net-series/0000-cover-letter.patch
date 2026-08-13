@@ -1,0 +1,91 @@
+From 34ac0130662b4163327c6a2e3307898778b5a14c Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
+Date: Thu, 13 Aug 2026 15:10:38 +0200
+Subject: [PATCH net 0/2] forcedeth: two register-window bounds fixes
+
+Two bounds fixes in forcedeth, both in the same shape: a loop that walks
+the register window one step too far. They are independent of each other
+and touch different functions.
+
+1/2 nv_suspend() and nv_resume() save and restore the non-PCI config
+    space with i <= register_size/sizeof(u32). On a VER3 device that is
+    exactly the length of saved_config_space[], so the last iteration
+    writes one element past the array on suspend, and on resume writel()s
+    that value one dword past the ioremap window. UBSAN catches it.
+
+2/2 nv_tx_timeout() dumps the window in rows of eight dwords but only
+    bounds the row's starting offset, so the final row always reads
+    between 12 and 28 bytes past the end of the mapping, on every one of
+    the three supported window sizes.
+
+Both are ancient: 1/2 dates to 2008, 2/2 to 2006. Neither is a
+regression, and neither has ever been reported as far as I can tell,
+which is unsurprising given the next section.
+
+Why these matter more than "reads a bit too far"
+
+  np->base = ioremap(addr, np->register_size) maps exactly
+  register_size bytes, so every overrun above leaves the mapping rather
+  than merely running past a notional register range. On x86 the ioremap
+  is rounded up to page granularity, so nothing faults in practice. That
+  is presumably why both survived this long, and it is also why I would
+  not describe either as urgent.
+
+Testing
+
+  Reference hardware: Apple Mac mini Late 2009, MCP79 chipset, forcedeth
+  driving the onboard NIC.
+
+  1/2 is reproduced and fixed on hardware. With the stock module, one
+  deep S3 cycle produces two UBSAN splats, one per loop. With the patched
+  module built and loaded (md5 of the running module checked against the
+  installed one), the same cycle produces none, the link comes back, the
+  DHCP lease is restored and ping shows no loss. Most recently confirmed
+  on 7.1.8, where a single S3 cycle reported :6225 from pci_pm_suspend
+  and :6240 from pci_pm_resume.
+
+  2/2 is arithmetic and a compile test only. Its code path sits behind
+  the debug_tx_timeout module parameter and needs a genuine TX timeout to
+  run, which I cannot force safely on this machine. I would rather say
+  that plainly than imply a test I did not do.
+
+Two checkpatch notes, both deliberate
+
+  1/2 trips "Prefer a maximum 75 chars per line" on a line that is the
+  verbatim UBSAN splat. I left the quote intact rather than rewrap
+  diagnostic output to satisfy a heuristic.
+
+  1/2 also trips two "spaces preferred around that '/'" CHECKs on
+  register_size/sizeof(u32). That spelling is what the file already uses,
+  including in the untouched identical loop in nv_get_regs(). Adding
+  spaces would leave the two lines I touch inconsistent with their own
+  neighbourhood, so I kept the fix minimal. Happy to change it if you
+  prefer the other way round.
+
+AI assistance
+
+  Per Documentation/process/coding-assistants.rst: this work is AI
+  assisted. I use Claude (claude-opus-5) as a coding and analysis
+  assistant. Both patches carry an Assisted-by trailer accordingly, and
+  no Signed-off-by is added by the tool.
+
+  Nature of the assistance: the assistant did the code archaeology and
+  most of the drafting. I described the symptom, asked for the mechanism
+  to be traced in the source rather than guessed, and asked for each
+  claim to be backed by a file and a line. The UBSAN output and the
+  before-and-after S3 measurements are from the machine, not model
+  output. I reviewed the result, I understand the code, and I take
+  responsibility for it.
+
+Marek Czernohous (2):
+  forcedeth: fix off-by-one when saving/restoring non-PCI config space
+  forcedeth: stop the tx_timeout register dump past the ioremap window
+
+ drivers/net/ethernet/nvidia/forcedeth.c | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+
+base-commit: c21bb4193868a8de71fc4693fa741e195fdf5d86
+-- 
+2.54.0
+
