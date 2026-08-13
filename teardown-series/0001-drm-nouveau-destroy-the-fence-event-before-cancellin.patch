@@ -1,0 +1,73 @@
+From f7eaee5b717a8b0c596bd6ac4dcae5f8b9d8e8c2 Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
+Date: Thu, 13 Aug 2026 10:20:31 +0200
+Subject: [PATCH 1/3] drm/nouveau: destroy the fence event before cancelling
+ its work
+
+nouveau_fence_context_del() cancels the uevent work first and only tears
+the event down afterwards:
+
+	cancel_work_sync(&fctx->uevent_work);
+	nouveau_fence_context_kill(fctx, 0);
+	nvif_event_dtor(&fctx->event);
+
+Between the cancel and the dtor the event is still armed, and
+nouveau_fence_wait_uevent_handler() queues the work unconditionally:
+
+	schedule_work(&fctx->uevent_work);
+	return NVIF_EVENT_KEEP;
+
+So a non-stall interrupt arriving in that window re-arms the work that
+was just cancelled. The callers free the context immediately afterwards,
+for example nv04_fence_context_del():
+
+	nouveau_fence_context_del(&fctx->base);
+	chan->fence = NULL;
+	nouveau_fence_context_free(&fctx->base);
+
+nouveau_fence_uevent_work() then runs against freed memory, taking
+fctx->lock and walking fctx->pending.
+
+Drop the event first, so no further work can be queued, and only then
+drain what is already queued.
+
+nouveau_fence_context_kill() keeps its place after the drain. It does
+touch the event, calling nvif_event_block() for every fence it signals,
+but after the dtor that call is a no-op: nvif_event_block() is guarded
+by nvif_event_constructed(), and nvif_object_dtor() has cleared
+object->client. Blocking an event that no longer exists would be
+pointless in any case. The same guard covers the nvif_event_allow() and
+nvif_event_block() calls in nouveau_fence_enable_signaling(), which a
+remaining fence holder can still reach while the context goes away.
+
+Found by the Sashiko review bot on an unrelated posting, and confirmed
+against the source.
+
+Fixes: 39126abc5e20 ("nouveau: offload fence uevents work to workqueue")
+Cc: stable@vger.kernel.org
+Assisted-by: Claude:claude-opus-5
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+---
+ drivers/gpu/drm/nouveau/nouveau_fence.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/nouveau/nouveau_fence.c b/drivers/gpu/drm/nouveau/nouveau_fence.c
+index edbe9e08ba0f..4a3698dc2cd1 100644
+--- a/drivers/gpu/drm/nouveau/nouveau_fence.c
++++ b/drivers/gpu/drm/nouveau/nouveau_fence.c
+@@ -96,9 +96,9 @@ nouveau_fence_context_kill(struct nouveau_fence_chan *fctx, int error)
+ void
+ nouveau_fence_context_del(struct nouveau_fence_chan *fctx)
+ {
++	nvif_event_dtor(&fctx->event);
+ 	cancel_work_sync(&fctx->uevent_work);
+ 	nouveau_fence_context_kill(fctx, 0);
+-	nvif_event_dtor(&fctx->event);
+ 	fctx->dead = 1;
+ 
+ 	/*
+
+base-commit: c21bb4193868a8de71fc4693fa741e195fdf5d86
+-- 
+2.54.0
+

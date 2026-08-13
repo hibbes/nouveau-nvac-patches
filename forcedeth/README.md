@@ -46,12 +46,46 @@ which cannot be forced safely.
 
 ## Before sending anything upstream
 
-- **Neither patch carries a `Fixes:` tag.** Both loops are long-standing
-  mainline code and this box has no kernel git history (gentoo-sources
-  ships a tarball), so the introducing commits could not be determined
-  locally. `checkpatch` explicitly asks for one on 0001 because that
-  message carries a `Call Trace:`. Determine them against a real kernel
-  clone before posting rather than guessing hashes.
+- ~~**Neither patch carries a `Fixes:` tag.**~~ **RESOLVED 2026-08-13.** The
+  claim that this box has no kernel git history is out of date: since the
+  nouveau submission work there is a full clone at `~/linux-nouveau-patches`
+  with 1.46M commits reaching back to `1da177e4c3f4` (2.6.12-rc2, 2005). Both
+  introducing commits were found there and **verified by reading the diffs**,
+  not guessed from a pickaxe hit alone:
+
+  | Patch | Tag to add |
+  |---|---|
+  | 0001 config space | `Fixes: 1a1ca86158ee ("[netdrvr] forcedeth: save/restore device configuration space")` |
+  | 0002 tx_timeout dump | `Fixes: 86a0f04387bf ("[PATCH] forcedeth: fix initialization")` |
+
+  Method, for repeatability: `git blame` is useless here because the clone
+  carries one shallow boundary (`.git/shallow` holds a 2026 merge), so blame
+  reports `^a55f7f5f29b3` for everything. Bracketing across release tags works
+  instead: the pattern is absent in v2.6.16, present once in v2.6.20, and
+  three times by v2.6.30. `git log -S 'i <= np->register_size' v2.6.16..v2.6.20`
+  and `git log -S 'saved_config_space' v2.6.25..v2.6.30` on the old path
+  `drivers/net/forcedeth.c` then name the two commits.
+
+  Worth knowing: `86a0f04387bf` introduced the `<=` at **two** sites. The one
+  in `nv_get_regs()` (today line 4588) was corrected at some point, the one in
+  the tx_timeout dump was not. That is why the file carries both spellings
+  today.
+
+- **`Cc: stable`, corrected understanding.** An earlier note assumed netdev
+  refuses `Cc: stable`. `Documentation/process/maintainer-netdev.rst` says the
+  opposite in its "Stable tree" section: "While it used to be the case that
+  netdev submissions were not supposed to carry explicit CC:
+  stable@vger.kernel.org tags that is no longer the case today." Follow the
+  normal stable rules. For 0001 that is justified (real bug, reproduced on
+  hardware); for 0002 probably not, since it sits behind a debug module
+  parameter.
+
+- **Subject prefix must be `[PATCH net]`**, not `[PATCH]`. Fixes go to the
+  `net` tree, and `maintainer-netdev.rst` lists tree designation and the
+  `Fixes:` tag as the first two requirements.
+
+- **Check "reverse xmas tree"** before posting. Both patches only change loop
+  conditions, so it most likely does not apply, but netdev enforces it.
 - **0001 has two checkpatch CHECKs**, "spaces preferred around that '/'"
   on the touched lines. That spacing is pre-existing and matches the
   identical loop in `nv_get_regs()` (forcedeth.c:4588), so it was left

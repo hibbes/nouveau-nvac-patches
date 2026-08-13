@@ -11,7 +11,7 @@ Anubis blockiert ist).
 | 1 | NVAC-Stabilität (0001, 0002) | **v3 auf der Liste**, seit 11.06. keine Reaktion |
 | 2 | nv04-FIFO v1 (0004, 0006) | **zurückgezogen** 25.07. |
 | 3 | nv04-FIFO v2 (3 Patches) | **gesendet** 06.08., keine Reaktion |
-| 4 | forcedeth (netdev) | fertig, **nicht gesendet**, `Fixes:` fehlt |
+| 4 | forcedeth (netdev) | fertig, **nicht gesendet**; `Fixes:` seit 13.08. ermittelt, Rest mechanisch |
 | 5 | nv04-FIFO v3, **Viererserie** | **GESENDET 13.08.2026 01:13**, 5x SMTP 250 |
 | 6 | Tesla-Recovery (ex 5/5) | zurückgestellt für v4, zwei Codefehler, siehe unten |
 
@@ -86,7 +86,8 @@ gemeldet, alle drei berechtigt. Genau deshalb existiert Spur 5.
 | Status | **fertig, nicht gesendet** |
 | Quellen | `forcedeth/` |
 | Belege | 0001 per Hardwaretest (2 UBSAN-Splats mit Stock-Modul, 0 mit gepatchtem, über echtes S3); 0002 nur Compile plus Begründung |
-| Offen | beiden fehlt der `Fixes:`-Tag, den netdev zwingend verlangt; Betreff muss `[PATCH net]` lauten |
+| Offen | Betreff auf `[PATCH net]`, Tags eintragen, neu erzeugen, checkpatch, Empfängerliste |
+| Blocker weg | **Die `Fixes:`-Commits sind am 13.08. ermittelt und per Diff belegt.** 0001: `1a1ca86158ee`, 0002: `86a0f04387bf`. Herleitung und Methode in [`forcedeth/README.md`](forcedeth/README.md) |
 
 Nebenbefund vom 12.08.2026: der Off-by-one feuert weiterhin bei **jedem** Suspend,
 zuletzt sichtbar beim Heil-S3 des EVO-Watchdogs
@@ -167,6 +168,43 @@ Die beiden Codefehler, beide in 5/5, beide selbst am Quelltext nachgeprüft:
 sauber für sich, 4/5 ist dann ein wohlbegründetes No-op), und 5/5 für v4
 umbauen.
 
+### Dritte Auflage für v4: der Erholungspfad greift an der falschen Quelle
+
+Am **13.08.2026** hing die Referenzmaschine hart, und der Vorfall ist für den
+Umbau von 5/5 unmittelbar einschlägig. Vollständig in
+[`docs/2026-08-13-pgraph-ccache-hang/`](docs/2026-08-13-pgraph-ccache-hang/).
+
+Kurz: Chromes GPU-Prozess löste einen VM-Fault auf den Constant Buffer aus
+(`gr: TRAP_CCACHE`, `PAGE_NOT_PRESENT`). Nouveau meldete den Fault und ließ ihn
+fallen. Kein `nvkm_chan_error()`, kein Kanal-Kill, kein Fence-Signal. PGRAPH
+stand danach dauerhaft (`PGRAPH_STATUS 00000503` unverändert über Minuten,
+`PFIFO_CACHE1_GET` auf 0 gegen `PUT 0244`), `labwc` hing in
+`nouveau_gem_ioctl_cpu_prep`, dreizehn TTM-Worker im D-State. Nur Reboot half,
+und der blieb an eben diesen Workern hängen, sodass die Maschine danach erst
+nach einem manuellen `fsck` auf `sda3` wieder bootete.
+
+Zwei Schlüsse, sauber getrennt:
+
+1. **Was der Vorfall belegt.** Die Annahme hinter 4/4 der gesendeten Serie
+   stimmt, jetzt erstmals mit Messwerten von echter Hardware statt aus dem
+   Quelltext hergeleitet: ein Kanalfehler ohne Abnehmer bedeutet Fences, die nie
+   signalisieren, und genau die vorhergesagte Blockade dahinter.
+2. **Was er über 5/5 sagt, unbequem.** Der zurückgestellte Patch hätte diesen
+   Hänger **nicht** gefangen. Er hängt sich an `cache_error` und `dma_pusher` in
+   `nv04_fifo_intr`, der real aufgetretene Fehler kam aber aus **PGRAPH**. Der
+   Umbau muss die PGRAPH-Traps also mitnehmen, sonst deckt der Erholungspfad
+   ausgerechnet den Fall nicht ab, der auf der Referenzhardware tatsächlich
+   auftritt.
+
+**Nebenbefund, korrigiert:** in der ersten Fassung des Befunds stand,
+Bit 31 in `PGRAPH_TRAPPED_ADDR` zeige einen eingerasteten Trap an. Das war aus
+einer einzigen Beobachtung erfunden und ist falsch. `nv50_gr_intr()`
+(`nvkm/engine/gr/nv50.c:628`) liest aus dem Register nur `subc` und `mthd`,
+Bit 31 nirgends, und quittiert über `0x400100`; das Register wird nie
+zurückgesetzt. Gegenprobe auf frisch gebooteter, leerlaufender GPU: `STATUS 0`,
+`TRAPPED_ADDR 800315e0` mit gesetztem Bit 31. Brauchbarer Indikator ist
+`PGRAPH_STATUS`, mehrfach gelesen.
+
 **Und unabhängig davon:** `v3-0000-cover-letter.patch` ist die veraltete Fassung
 und trägt die vom Autor selbst widerlegte Behauptung, der Compositor sterbe mit
 dem Opfer. Diese Datei ginge raus, nicht `v3-cover-body.txt`.
@@ -216,7 +254,81 @@ anfasst. Beide selbst am Quelltext nachgeprüft und **bestätigt**:
 
 **Naheliegender Nachfolger:** eine kleine Serie mit genau diesen zwei
 Teardown-Fixes. Das Muster ist dasselbe, das die Viererserie beschreibt, und
-niemand kennt es gerade besser.
+niemand kennt es gerade besser. **Umgesetzt, siehe Spur 7.**
+
+## Spur 7: Teardown-Serie (Dreierserie, FERTIG, NICHT GESENDET)
+
+| | |
+|---|---|
+| Status | **inhaltlich fertig, wartet auf Freigabe zum Versand** |
+| Betreff | `[PATCH 0/3] drm/nouveau: teardown ordering fixes for events and work` |
+| Branch | `nouveau-event-teardown` in `~/linux-nouveau-patches` |
+| Basis | `c21bb4193868` (dieselbe wie die Viererserie) |
+| checkpatch | `--strict` sauber auf allen dreien |
+
+| Patch | Gegenstand | Fixes |
+|---|---|---|
+| 1/3 | `nouveau_fence_context_del()`: Ereignis vor dem Entleeren des Works abbauen | `39126abc5e20` |
+| 2/3 | `nouveau_connector_destroy()`: `irq_work` entleeren, bevor der Connector fällt | `773eb04d14a1` |
+| 3/3 | `nouveau_dp_irq()`: `outp` erst prüfen, dann dereferenzieren | `773eb04d14a1` |
+
+Alle drei mit `Cc: stable`. 1/3 und 2/3 sind die beiden sashiko-Befunde von
+oben, 3/3 fiel beim Lesen derselben Funktion mit ab.
+
+**Dass 2/3 und 3/3 denselben Commit zitieren, ist kein Versehen:**
+`773eb04d14a1` machte `nouveau_dp_irq()` zum Work-Callback und erzeugte damit in
+einem Zug beides, das nie entleerte Work und den vorgezogenen Zugriff (der
+`drm`-Zeiger war vorher ein Argument und wurde danach aus dem Encoder geholt,
+was die Dereferenzierung über die vorhandene NULL-Prüfung schob).
+
+### Was die Gegenprüfung vor dem Versand gefunden hat
+
+Vier Befunde, davon zwei echt:
+
+1. **ECHT, behoben.** Der Commit-Text von 1/3 behauptete,
+   `nouveau_fence_context_kill()` hänge nicht am Ereignis. Der Quelltext sagt das
+   Gegenteil: die Funktion ruft `nvif_event_block(&fctx->event)` für jeden Fence,
+   den sie signalisiert. Die Umstellung ist trotzdem richtig, aber aus einem
+   anderen Grund, als der Text behauptete: `nvif_event_block()` steht hinter
+   `nvif_event_constructed()`, und `nvif_object_dtor()` setzt `object->client`
+   auf NULL, der Aufruf verpufft also folgenlos. Der Commit-Text sagt das jetzt.
+2. **ECHT, behoben.** 3/3 hatte weder `Fixes:` noch `Cc: stable`. Der Ursprung
+   ist per `git log -S` und `git show` auf `773eb04d14a1` festgenagelt, nicht
+   geraten: Lyudes Commit von 2020 (`a0922278f83e`) scheidet aus, dort war `drm`
+   noch ein Funktionsparameter.
+3. **WIDERLEGT.** "Das Muster wiederholt sich eine Ebene höher, `drm->hpd_work`
+   wird beim Abbau nie geleert." Doch, wird es: `nouveau_display_fini()`
+   (`nouveau_display.c:600`) ruft `cancel_work_sync(&drm->hpd_work)` direkt nach
+   dem Sperren der Hotplug-Ereignisse. Deshalb kein vierter Patch.
+4. **ENTKRÄFTET.** "Die Umstellung verbreitert ein Fenster, in dem
+   `nvif_event_allow()` auf ein zerstörtes Ereignis trifft." Derselbe
+   `nvif_event_constructed()`-Riegel deckt auch `nvif_event_allow()` in
+   `nouveau_fence_enable_signaling()` ab.
+
+### Empfängerliste (entschieden 13.08.2026)
+
+**Skeggs bleibt weg.** Entscheidung von Marek, nachdem `bskeggs@nvidia.com` beim
+Versand der Viererserie mit `550 Access denied` abgelehnt hatte und
+`get_maintainer.pl` mit `bskeggs@redhat.com` nur eine Adresse aus MAINTAINERS und
+Historie anbietet, also aus genau der Quellenart, die in den Bounce geführt hat.
+Er war ohnehin nur als Autor der `Fixes:`-Commits im Cc; die zuständigen
+Maintainer erreicht die Serie ohne ihn.
+
+```
+To:  nouveau@lists.freedesktop.org
+     dri-devel@lists.freedesktop.org
+Cc:  linux-kernel@vger.kernel.org
+     Danilo Krummrich <dakr@kernel.org>
+     Lyude Paul <lyude@redhat.com>
+     David Airlie <airlied@gmail.com>
+     Simona Vetter <simona@ffwll.ch>
+```
+
+Das ist die Liste der Viererserie minus Skeggs, die dort 5x SMTP 250 lieferte.
+`get_maintainer.pl` nennt zusätzlich die drm-misc-Runde (Lankhorst, Ripard,
+Zimmermann, Airlie unter der Red-Hat-Adresse). Die war bei den bisherigen
+Versänden nicht dabei und bleibt es vorerst auch nicht, damit der Thread dort
+liegt, wo die vorigen liegen.
 
 ### Bounce: bskeggs@nvidia.com nimmt keine Post an
 

@@ -1,0 +1,85 @@
+Three teardown fixes in nouveau, all the same shape: something that can
+still run after the thing it points at has been torn down or freed.
+
+They came out of the review of the nv04 FIFO series,
+
+  https://lore.kernel.org/nouveau/20260812231330.705425-1-mczernohous@gmail.com/
+
+where the Sashiko review bot pointed at exactly this class of problem in
+the channel teardown path. It was right, so I went looking for the rest
+of it in the neighbouring code. These three are what I found and could
+back up against the source.
+
+1/3 nouveau_fence_context_del() cancels the uevent work first and drops
+    the event afterwards. In between, the event is still armed and
+    nouveau_fence_wait_uevent_handler() queues the work unconditionally,
+    so a non-stall interrupt in that window re-arms the work that was
+    just cancelled. The callers free the context immediately after,
+    which leaves nouveau_fence_uevent_work() walking freed memory.
+    Destroy the event first, then drain.
+
+2/3 nouveau_connector_destroy() drops the connector's two events but
+    never drains nv_connector->irq_work, which is what the DP IRQ event
+    schedules. The work can then run against a connector that is about
+    to be, or has already been, freed.
+
+3/3 nouveau_dp_irq() looks the encoder up and dereferences it in the
+    declaration block, five lines above the NULL test that the same
+    function already carries.
+
+2/3 and 3/3 both point at the same commit. 773eb04d14a1 turned
+nouveau_dp_irq() into a work callback, and that single change introduced
+both the undrained work and the early dereference: the drm pointer used
+to be an argument, and recovering it from the encoder put a dereference
+above the existing test.
+
+All three carry Fixes: and Cc: stable.
+
+I also checked the same shape one level up, since it would have been the
+obvious next instance: drm->hpd_work is already drained, in
+nouveau_display_fini(), right after the hotplug events are blocked. It
+needs nothing, so there is no fourth patch here.
+
+Testing
+
+  Reference hardware: Apple Mac mini Late 2009, MCP79 / GeForce 9400M
+  (NVAC), Core 2 Duo, Wayland (labwc).
+
+  Build. The series is built against the stated base commit: the nouveau
+  module compiles and links with zero warnings and zero errors.
+  checkpatch.pl --strict is clean on all three patches.
+
+  What the testing does not show, stated plainly: I have not managed to
+  hit any of these three windows deliberately on this hardware. They are
+  ordering bugs reasoned out from the source rather than from a
+  reproduction, and I would rather say that than dress up a crash I do
+  not have. Each patch names the file and the function it argues from so
+  the reasoning can be checked directly.
+
+  For 3/3 in particular: reaching the NULL path needs find_encoder() to
+  come back empty for a connector that is running DP IRQ work. I have
+  not observed that. The argument for the patch is simply that the
+  function already tests for it, and the test is worthless below the
+  dereference.
+
+AI assistance
+
+  Lyude asked on an earlier thread whether these patches were written by
+  a human and pointed at Documentation/process/coding-assistants.rst.
+  The answer, repeated here for the archive: this work is AI assisted. I
+  use Claude (claude-opus-5) as a coding and analysis assistant. Every
+  patch carries an Assisted-by trailer accordingly, and no Signed-off-by
+  is added by the tool.
+
+  Nature of the assistance, so you can calibrate your review: the
+  assistant did most of the code archaeology and drafting. I described
+  symptoms, asked for the mechanism to be traced in the source rather
+  than guessed, and asked for each claim to be backed by a file and a
+  line. The assistant also reviewed its own drafts adversarially, which
+  is how a wrong justification in 1/3 was caught before this posting: an
+  earlier draft claimed nouveau_fence_context_kill() does not touch the
+  event, which the source contradicts. It does call nvif_event_block(),
+  and the reason the reordering is still safe is the
+  nvif_event_constructed() guard, not the absence of the call. The
+  commit message now says that. I reviewed the result, I understand the
+  code, and I take responsibility for it.
