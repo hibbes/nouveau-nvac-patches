@@ -1,0 +1,233 @@
+=== 2026-08-13 10:45:39  up 79952s  kernel 7.1.8-gentoo-dist-bin ===
+
+--- EVO ---
+  core   2d0b001b
+  base0  4003001b
+  base1  0c05001b
+  super  00000000
+  intr0  00000000
+  intr1  00000008
+
+--- D-State und Fence-Warter ---
+    PID STAT WCHAN                                    COMMAND         COMMAND
+  76849 Sl+  dma_fence_default_wait                   labwc           /usr/bin/labwc -d
+ 593480 D<   -                                        kworker/u9:2+tt [kworker/u9:2+ttm]
+ 675257 D<   -                                        kworker/u9:0+tt [kworker/u9:0+ttm]
+1175398 D<   -                                        kworker/u9:1+tt [kworker/u9:1+ttm]
+1175599 D<   -                                        kworker/u9:3+tt [kworker/u9:3+ttm]
+1175764 D<   -                                        kworker/u9:4+tt [kworker/u9:4+ttm]
+1176001 D<   -                                        kworker/u9:6+tt [kworker/u9:6+ttm]
+1176006 D<   -                                        kworker/u9:11+t [kworker/u9:11+ttm]
+1176007 D<   -                                        kworker/u9:12+t [kworker/u9:12+ttm]
+1176008 D<   -                                        kworker/u9:13+t [kworker/u9:13+ttm]
+1176009 D<   -                                        kworker/u9:14+t [kworker/u9:14+ttm]
+1176010 D<   -                                        kworker/u9:15+t [kworker/u9:15+ttm]
+1184197 Ss   do_wait                                  bash            /bin/bash -c source /home/neo/.claude/shell-snapshots/snapshot-bash-1786610664223-cki6a9.s
+1184226 S    anon_pipe_read                           awk             awk NR==1 || $2 ~ /^D/ || /dma_fence/
+
+--- Stacks ---
+  PID 76849 (labwc)
+    [<0>] dma_fence_default_wait+0x1d5/0x2b0
+    [<0>] dma_fence_wait_timeout+0xcc/0x1b0
+    [<0>] dma_resv_wait_timeout+0xce/0x1d0
+    [<0>] nouveau_gem_ioctl_cpu_prep+0x53/0xc0 [nouveau]
+    [<0>] drm_ioctl_kernel+0xae/0x100
+    [<0>] drm_ioctl+0x2a8/0x550
+    [<0>] nouveau_drm_ioctl+0x58/0xc0 [nouveau]
+    [<0>] __x64_sys_ioctl+0x97/0xe0
+    [<0>] do_syscall_64+0xe2/0x590
+    [<0>] entry_SYSCALL_64_after_hwframe+0x76/0x7e
+  PID 593480 (kworker/u9:2+ttm)
+    [<0>] dma_fence_default_wait+0x1d5/0x2b0
+    [<0>] dma_fence_wait_timeout+0xcc/0x1b0
+    [<0>] dma_resv_wait_timeout+0xce/0x1d0
+    [<0>] ttm_bo_fini+0x82/0x5c0 [ttm]
+    [<0>] process_one_work+0x19d/0x3a0
+    [<0>] worker_thread+0x1af/0x320
+    [<0>] kthread+0xe3/0x120
+    [<0>] ret_from_fork+0x1a1/0x270
+    [<0>] ret_from_fork_asm+0x1a/0x30
+  PID 675257 (kworker/u9:0+ttm)
+    [<0>] dma_fence_default_wait+0x1d5/0x2b0
+    [<0>] dma_fence_wait_timeout+0xcc/0x1b0
+    [<0>] dma_resv_wait_timeout+0xce/0x1d0
+    [<0>] ttm_bo_fini+0x82/0x5c0 [ttm]
+    [<0>] process_one_work+0x19d/0x3a0
+    [<0>] worker_thread+0x1af/0x320
+    [<0>] kthread+0xe3/0x120
+    [<0>] ret_from_fork+0x1a1/0x270
+    [<0>] ret_from_fork_asm+0x1a/0x30
+  PID 1175398 (kworker/u9:1+ttm)
+    [<0>] dma_fence_default_wait+0x1d5/0x2b0
+    [<0>] dma_fence_wait_timeout+0xcc/0x1b0
+    [<0>] dma_resv_wait_timeout+0xce/0x1d0
+    [<0>] ttm_bo_fini+0x82/0x5c0 [ttm]
+    [<0>] process_one_work+0x19d/0x3a0
+    [<0>] worker_thread+0x1af/0x320
+    [<0>] kthread+0xe3/0x120
+    [<0>] ret_from_fork+0x1a1/0x270
+    [<0>] ret_from_fork_asm+0x1a/0x30
+  PID 1175599 (kworker/u9:3+ttm)
+    [<0>] dma_fence_default_wait+0x1d5/0x2b0
+    [<0>] dma_fence_wait_timeout+0xcc/0x1b0
+    [<0>] dma_resv_wait_timeout+0xce/0x1d0
+    [<0>] ttm_bo_fini+0x82/0x5c0 [ttm]
+    [<0>] process_one_work+0x19d/0x3a0
+    [<0>] worker_thread+0x1af/0x320
+    [<0>] kthread+0xe3/0x120
+    [<0>] ret_from_fork+0x1a1/0x270
+    [<0>] ret_from_fork_asm+0x1a/0x30
+  PID 1175764 (kworker/u9:4+ttm)
+    [<0>] dma_fence_default_wait+0x1d5/0x2b0
+    [<0>] dma_fence_wait_timeout+0xcc/0x1b0
+    [<0>] dma_resv_wait_timeout+0xce/0x1d0
+    [<0>] ttm_bo_fini+0x82/0x5c0 [ttm]
+    [<0>] process_one_work+0x19d/0x3a0
+    [<0>] worker_thread+0x1af/0x320
+    [<0>] kthread+0xe3/0x120
+    [<0>] ret_from_fork+0x1a1/0x270
+    [<0>] ret_from_fork_asm+0x1a/0x30
+  PID 1176001 (kworker/u9:6+ttm)
+    [<0>] dma_fence_default_wait+0x1d5/0x2b0
+    [<0>] dma_fence_wait_timeout+0xcc/0x1b0
+    [<0>] dma_resv_wait_timeout+0xce/0x1d0
+    [<0>] ttm_bo_fini+0x82/0x5c0 [ttm]
+    [<0>] process_one_work+0x19d/0x3a0
+    [<0>] worker_thread+0x1af/0x320
+    [<0>] kthread+0xe3/0x120
+    [<0>] ret_from_fork+0x1a1/0x270
+    [<0>] ret_from_fork_asm+0x1a/0x30
+  PID 1176006 (kworker/u9:11+ttm)
+    [<0>] dma_fence_default_wait+0x1d5/0x2b0
+    [<0>] dma_fence_wait_timeout+0xcc/0x1b0
+    [<0>] dma_resv_wait_timeout+0xce/0x1d0
+    [<0>] ttm_bo_fini+0x82/0x5c0 [ttm]
+    [<0>] process_one_work+0x19d/0x3a0
+    [<0>] worker_thread+0x1af/0x320
+    [<0>] kthread+0xe3/0x120
+    [<0>] ret_from_fork+0x1a1/0x270
+    [<0>] ret_from_fork_asm+0x1a/0x30
+  PID 1176007 (kworker/u9:12+ttm)
+    [<0>] dma_fence_default_wait+0x1d5/0x2b0
+    [<0>] dma_fence_wait_timeout+0xcc/0x1b0
+    [<0>] dma_resv_wait_timeout+0xce/0x1d0
+    [<0>] ttm_bo_fini+0x82/0x5c0 [ttm]
+    [<0>] process_one_work+0x19d/0x3a0
+    [<0>] worker_thread+0x1af/0x320
+    [<0>] kthread+0xe3/0x120
+    [<0>] ret_from_fork+0x1a1/0x270
+    [<0>] ret_from_fork_asm+0x1a/0x30
+  PID 1176008 (kworker/u9:13+ttm)
+    [<0>] dma_fence_default_wait+0x1d5/0x2b0
+    [<0>] dma_fence_wait_timeout+0xcc/0x1b0
+    [<0>] dma_resv_wait_timeout+0xce/0x1d0
+    [<0>] ttm_bo_fini+0x82/0x5c0 [ttm]
+    [<0>] process_one_work+0x19d/0x3a0
+    [<0>] worker_thread+0x1af/0x320
+    [<0>] kthread+0xe3/0x120
+    [<0>] ret_from_fork+0x1a1/0x270
+    [<0>] ret_from_fork_asm+0x1a/0x30
+  PID 1176009 (kworker/u9:14+ttm)
+    [<0>] dma_fence_default_wait+0x1d5/0x2b0
+    [<0>] dma_fence_wait_timeout+0xcc/0x1b0
+    [<0>] dma_resv_wait_timeout+0xce/0x1d0
+    [<0>] ttm_bo_fini+0x82/0x5c0 [ttm]
+    [<0>] process_one_work+0x19d/0x3a0
+    [<0>] worker_thread+0x1af/0x320
+    [<0>] kthread+0xe3/0x120
+    [<0>] ret_from_fork+0x1a1/0x270
+    [<0>] ret_from_fork_asm+0x1a/0x30
+  PID 1176010 (kworker/u9:15+ttm)
+    [<0>] dma_fence_default_wait+0x1d5/0x2b0
+    [<0>] dma_fence_wait_timeout+0xcc/0x1b0
+    [<0>] dma_resv_wait_timeout+0xce/0x1d0
+    [<0>] ttm_bo_fini+0x82/0x5c0 [ttm]
+    [<0>] process_one_work+0x19d/0x3a0
+    [<0>] worker_thread+0x1af/0x320
+    [<0>] kthread+0xe3/0x120
+    [<0>] ret_from_fork+0x1a1/0x270
+    [<0>] ret_from_fork_asm+0x1a/0x30
+
+--- letzte 40 nouveau-Zeilen ---
+[Do, 13. Aug 2026, 10:40:18]  ? nvkm_chan_cctx_bind+0xc6/0x110 [nouveau]
+[Do, 13. Aug 2026, 10:40:18]  ? nv50_chan_start+0x31/0x50 [nouveau]
+[Do, 13. Aug 2026, 10:40:18]  ? nvkm_chan_allow+0x4b/0x60 [nouveau]
+[Do, 13. Aug 2026, 10:40:18]  ? nvkm_uchan_object_init_0+0xb1/0x1b0 [nouveau]
+[Do, 13. Aug 2026, 10:40:18]  ? nvkm_oproxy_init+0x27/0x70 [nouveau]
+[Do, 13. Aug 2026, 10:40:18]  ? nvkm_object_init+0x90/0x120 [nouveau]
+[Do, 13. Aug 2026, 10:40:18]  ? nvkm_object_insert+0xa9/0xe0 [nouveau]
+[Do, 13. Aug 2026, 10:40:18]  ? nvkm_ioctl_new+0x1a1/0x210 [nouveau]
+[Do, 13. Aug 2026, 10:40:18]  ? __pfx_nvkm_uchan_object_new+0x10/0x10 [nouveau]
+[Do, 13. Aug 2026, 10:40:18]  ? __pfx_nvkm_object_new+0x10/0x10 [nouveau]
+[Do, 13. Aug 2026, 10:40:18]  ? nvkm_ioctl+0xd2/0x1e0 [nouveau]
+[Do, 13. Aug 2026, 10:40:33] nouveau 0000:02:00.0: chrome[1178313]: failed to idle channel 5 [chrome[1178313]]
+[Do, 13. Aug 2026, 10:40:35] nouveau 0000:02:00.0: timeout
+[Do, 13. Aug 2026, 10:40:35] WARNING: nvkm/engine/fifo/g84.c:132 at g84_ectx_bind+0x429/0x440 [nouveau], CPU#1: chrome/1178313
+[Do, 13. Aug 2026, 10:40:35] Modules linked in: rfcomm snd_seq_dummy snd_hrtimer snd_seq snd_seq_device fuse nf_conntrack_netlink xt_nat iptable_raw veth bridge xt_set ip_set xt_addrtype overlay bnep xt_connmark xt_conntrack ip6table_mangle iptable_mangle xt_MASQUERADE xt_mark tun nf_tables nfnetlink ip6table_nat ip6table_filter ip6_tables iptable_nat nf_nat nf_conntrack nf_defrag_ipv6 nf_defrag_ipv4 iptable_filter ip_tables 8021q garp mrp stp llc b43 cordic bcma mac80211 coretemp kvm_intel btusb btmtk cfg80211 btrtl libarc4 applesmc btbcm kvm irqbypass btintel joydev pcspkr bluetooth snd_hda_codec_alc882 snd_hda_codec_realtek_lib snd_hda_codec_generic acpi_cpufreq binfmt_misc rfkill ssb mmc_core snd_hda_intel xpad snd_hda_codec usblp ff_memless apple_mfi_fastcharge snd_hda_core drivetemp snd_intel_dspcfg snd_intel_sdw_acpi snd_hwdep snd_pcm snd_timer snd i2c_nforce2 forcedeth soundcore firewire_ohci firewire_core crc_itu_t ata_generic pata_acpi hid_appleir nv_tco nouveau(OE) drm_ttm_helper ttm drm_client_lib video gpu_sched
+[Do, 13. Aug 2026, 10:40:35] RIP: 0010:g84_ectx_bind+0x430/0x440 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? nvkm_timer_wait_test+0x21/0x80 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  nvkm_chan_cctx_bind+0xc6/0x110 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  nvkm_uchan_object_fini_1+0x4e/0xa0 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  nvkm_oproxy_fini+0x70/0x90 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  nvkm_object_fini+0xc0/0x150 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  nvkm_object_fini+0x7a/0x150 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  nvkm_ioctl_del+0x34/0x60 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  nvkm_ioctl+0xd2/0x1e0 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  nvif_object_dtor+0x7d/0xb0 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  nouveau_channel_del+0x8a/0xf0 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  nouveau_abi16_chan_fini.isra.0+0x142/0x1c0 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  nouveau_abi16_fini+0xa3/0xe0 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  nouveau_drm_postclose+0x9f/0x160 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? nvkm_chan_cctx_bind+0xc6/0x110 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? nv50_chan_start+0x31/0x50 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? nvkm_chan_allow+0x4b/0x60 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? nvkm_uchan_object_init_0+0xb1/0x1b0 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? nvkm_oproxy_init+0x27/0x70 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? nvkm_object_init+0x90/0x120 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? nvkm_object_insert+0xa9/0xe0 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? nvkm_ioctl_new+0x1a1/0x210 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? __pfx_nvkm_uchan_object_new+0x10/0x10 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? __pfx_nvkm_object_new+0x10/0x10 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? nvkm_ioctl+0xd2/0x1e0 [nouveau]
+
+--- alles seit 09:40 ---
+[Do, 13. Aug 2026, 10:40:35]  ? nvkm_chan_cctx_bind+0xc6/0x110 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? nv50_chan_start+0x31/0x50 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? nvkm_chan_allow+0x4b/0x60 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? nvkm_uchan_object_init_0+0xb1/0x1b0 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? ktime_get+0xad/0x100
+[Do, 13. Aug 2026, 10:40:35]  ? nvkm_oproxy_init+0x27/0x70 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? nvkm_object_init+0x90/0x120 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? nvkm_object_insert+0xa9/0xe0 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? nvkm_ioctl_new+0x1a1/0x210 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? __pfx_nvkm_uchan_object_new+0x10/0x10 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? __pfx_nvkm_object_new+0x10/0x10 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? nvkm_ioctl+0xd2/0x1e0 [nouveau]
+[Do, 13. Aug 2026, 10:40:35]  ? __memcg_slab_free_hook+0x16c/0x1c0
+[Do, 13. Aug 2026, 10:40:35]  ? kmem_cache_free+0x26b/0x450
+[Do, 13. Aug 2026, 10:40:35]  ? task_work_run+0x5d/0x90
+[Do, 13. Aug 2026, 10:40:35]  ? task_work_run+0x5d/0x90
+[Do, 13. Aug 2026, 10:40:35]  ? switch_fpu_return+0x56/0xf0
+[Do, 13. Aug 2026, 10:40:35]  ? arch_exit_to_user_mode_prepare.isra.0+0x86/0xa0
+[Do, 13. Aug 2026, 10:40:35]  ? do_syscall_64+0x11f/0x590
+[Do, 13. Aug 2026, 10:40:35]  ? irqentry_exit+0x41/0x6e0
+[Do, 13. Aug 2026, 10:40:35]  ? do_syscall_64+0x99/0x590
+[Do, 13. Aug 2026, 10:40:35]  ? exc_page_fault+0x82/0x1d0
+[Do, 13. Aug 2026, 10:40:35]  entry_SYSCALL_64_after_hwframe+0x76/0x7e
+[Do, 13. Aug 2026, 10:40:35] RIP: 0033:0x7f2668b43e3f
+[Do, 13. Aug 2026, 10:40:35] Code: Unable to access opcode bytes at 0x7f2668b43e15.
+[Do, 13. Aug 2026, 10:40:35] RSP: 002b:00007fff88988900 EFLAGS: 00000246 ORIG_RAX: 0000000000000010
+[Do, 13. Aug 2026, 10:40:35] RAX: 0000000000000000 RBX: 0000103c00005a10 RCX: 00007f2668b43e3f
+[Do, 13. Aug 2026, 10:40:35] RDX: 00007fff889889a8 RSI: 0000000040046443 RDI: 0000000000000014
+[Do, 13. Aug 2026, 10:40:35] RBP: 00007fff889889a8 R08: 000055c16264ba40 R09: 00007fff88988a10
+[Do, 13. Aug 2026, 10:40:35] R10: 0000000000000001 R11: 0000000000000246 R12: 0000000040046443
+[Do, 13. Aug 2026, 10:40:35] R13: 0000000000000014 R14: 0000103c000918f0 R15: 00007fff88989d80
+[Do, 13. Aug 2026, 10:40:35]  </TASK>
+[Do, 13. Aug 2026, 10:40:35] ---[ end trace 0000000000000000 ]---
+[Do, 13. Aug 2026, 10:42:16] elogind-daemon[1591]: New session 29543 of user neo.
+[Do, 13. Aug 2026, 10:42:16] ptrace attach of "/usr/libexec/netdata/plugins.d/cups.plugin 2"[7111] was attempted by "lsns -t net -p 1180508 -o NETNSID -nr"[1180575]
+[Do, 13. Aug 2026, 10:42:16] ptrace attach of "/usr/libexec/netdata/plugins.d/cups.plugin 2"[7111] was attempted by "lsns -t net -p 1180508 -o NETNSID -nr"[1180575]
+[Do, 13. Aug 2026, 10:42:16] ptrace attach of "spawn-setns                                           "[7121] was attempted by "lsns -t net -p 1180508 -o NETNSID -nr"[1180575]
+[Do, 13. Aug 2026, 10:42:16] ptrace attach of "/usr/libexec/netdata/plugins.d/cgroup-network --cgroup /sys/fs/cgroup/29543"[1180543] was attempted by "lsns -t net -p 1180508 -o NETNSID -nr"[1180575]
+[Do, 13. Aug 2026, 10:42:16] ptrace attach of "spawn-unnamed                                                              "[1180544] was attempted by "lsns -t net -p 1180508 -o NETNSID -nr"[1180575]
+[Do, 13. Aug 2026, 10:42:16] ptrace attach of "spawn-unnamed                                                              "[1180544] was attempted by "lsns -t net -p 1180508 -o NETNSID -nr"[1180575]

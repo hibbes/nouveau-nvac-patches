@@ -1,0 +1,39 @@
+=== PGRAPH/PFIFO-Vollabzug 2026-08-13 10:49:45 ===
+  PMC_INTR               00000000
+  PMC_ENABLE             dff3d113
+  PMC_INTR_EN            00000001
+  PFIFO_INTR             00000000
+  PFIFO_INTR_EN          7ffd1151
+  PFIFO_PULL0            90000001
+  PFIFO_PUSH0            00000001
+  PFIFO_CACHE1_PUT       00000244
+  PFIFO_CACHE1_GET       00000000
+  PFIFO_CACHE1_CHID      ffffffff
+  PFIFO_CACHE1_DMA_PUT   0000aa8c
+  PFIFO_CACHE1_DMA_GET   0000aa8c
+  PGRAPH_STATUS          00000503
+  PGRAPH_INTR            00000000
+  PGRAPH_INTR_EN         03711077
+  PGRAPH_TRAPPED_ADDR    80030f04
+  PGRAPH_TRAPPED_DATA    00000000
+  PGRAPH_CTXCTL_STAT     30004001
+  PGRAPH_VSTATUS0        00000008
+  PGRAPH_VSTATUS1        00000000
+  PTIMER_LOW             9086b3c0
+
+=== Prozesse ===
+    PID STAT WCHAN                                    COMMAND
+  76849 Sl+  dma_fence_default_wait                   labwc
+ 593480 D<   -                                        kworker/u9:2+ttm
+ 675257 D<   -                                        kworker/u9:0+ttm
+1175398 D<   -                                        kworker/u9:1+ttm
+1175599 D<   -                                        kworker/u9:3+ttm
+1175764 D<   -                                        kworker/u9:4+ttm
+1176001 D<   -                                        kworker/u9:6+ttm
+1176002 D<   -                                        kworker/u9:7+ttm
+1176003 D<   -                                        kworker/u9:8+ttm
+1176006 D<   -                                        kworker/u9:11+ttm
+1176007 D<   -                                        kworker/u9:12+ttm
+1176008 D<   -                                        kworker/u9:13+ttm
+1176009 D<   -                                        kworker/u9:14+ttm
+1176010 D<   -                                        kworker/u9:15+ttm
