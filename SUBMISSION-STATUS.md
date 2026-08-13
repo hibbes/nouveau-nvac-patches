@@ -193,3 +193,43 @@ Einreichung wäre zu klären, ob `soft_dpms` überhaupt noch etwas beiträgt.
 - **Sicherheit:** das Gmail-App-Passwort steht im Klartext als
   `sendemail.smtppass` in `~/linux-nouveau-patches/.git/config` und gehört
   rotiert.
+
+## Reaktionen auf die Viererserie (13.08.)
+
+### sashiko-bot: KEIN Defekt in den Patches
+
+Erstmals nach zwei Runden. Die Meldungen zu 1/4 und 2/4 sind ausdrücklich als
+**"Pre-existing issues"** gekennzeichnet und betreffen Code, den die Serie nicht
+anfasst. Beide selbst am Quelltext nachgeprüft und **bestätigt**:
+
+1. **`nouveau_fence_context_del()`** (`nouveau_fence.c:97-109`) ruft
+   `cancel_work_sync(&fctx->uevent_work)` bei :99, aber `nvif_event_dtor(&fctx->event)`
+   erst bei :101. Dazwischen ist das Ereignis noch scharf, und
+   `nouveau_fence_wait_uevent_handler` (`:161-166`) reiht bedingungslos
+   `schedule_work(&fctx->uevent_work)` ein. Das eingereihte Work trifft dann den
+   freigegebenen `fctx`. **Das ist exakt die Spiegelung unseres eigenen 1/4, eine
+   Ebene tiefer.**
+2. **`nouveau_connector_destroy()`** (`nouveau_connector.c:395-407`) gibt den
+   Connector bei :406 frei, `schedule_work(&nv_connector->irq_work)` steht bei
+   :1210, und im gesamten Treiber gibt es **kein einziges** `cancel_work_sync`
+   dafür.
+
+**Naheliegender Nachfolger:** eine kleine Serie mit genau diesen zwei
+Teardown-Fixes. Das Muster ist dasselbe, das die Viererserie beschreibt, und
+niemand kennt es gerade besser.
+
+### Bounce: bskeggs@nvidia.com nimmt keine Post an
+
+`550 5.4.1 Recipient address rejected: Access denied` von
+`nvidia-com.mail.protection.outlook.com`. Das ist eine Exchange-Online-Richtlinie
+gegen externe Absender, kein "unbekannter Empfänger".
+
+**Lehre, und das war ein Fehler in der Vorbereitung:** ich hatte über
+`git log --format=%ae` geprüft, von welcher Adresse Skeggs *committet*, und
+daraus geschlossen, dass sie auch Post *annimmt*. Das folgt nicht auseinander.
+Für den nächsten Versand: prüfen, von welcher Adresse die Person zuletzt **auf
+der Liste geschrieben** hat, denn diese Adresse empfängt nachweislich.
+
+Praktische Folge gering: die Serie liegt auf nouveau, dri-devel und lkml, und die
+zuständigen Maintainer (Krummrich, Lyude) haben sie. Skeggs war nur als Autor des
+`Fixes:`-Commits im Cc.
