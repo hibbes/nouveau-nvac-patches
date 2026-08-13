@@ -1,0 +1,52 @@
+[Do, 13. Aug 2026, 12:40:55] nouveau 0000:02:00.0: disp: outp 03:0002:0242: acquire SOR-1
+[Do, 13. Aug 2026, 12:40:55] nouveau 0000:02:00.0: disp: sv-snap[pre]: super 00000140 pending 00000040 intr1 00000000 busy 0 core-ctrl 490a001b
+[Do, 13. Aug 2026, 12:40:55] nouveau 0000:02:00.0: disp: supervisor 00000010 00000140
+[Do, 13. Aug 2026, 12:40:55] nouveau 0000:02:00.0: disp: head-1: supervisor 1.0
+[Do, 13. Aug 2026, 12:40:55] nouveau 0000:02:00.0: disp: supervisor 00000020 00000150
+[Do, 13. Aug 2026, 12:40:55] nouveau 0000:02:00.0: disp: head-1: supervisor 2.0
+[Do, 13. Aug 2026, 12:40:55] nouveau 0000:02:00.0: disp: head-1: supervisor 2.2
+[Do, 13. Aug 2026, 12:40:57] nouveau 0000:02:00.0: drm: core notifier timeout
+[Do, 13. Aug 2026, 12:40:57] nouveau 0000:02:00.0: disp: sv-rescue probe: intr0 00000000 intr1 00000000 en 00000378/01ff0000 super 00000150 pending 00000020 busy 0
+[Do, 13. Aug 2026, 12:40:57] nouveau 0000:02:00.0: disp: sv-rescue: ch0 err 00000080/00000200 ctrl 8f0d001b
+[Do, 13. Aug 2026, 12:40:57] nouveau 0000:02:00.0: disp: sv-rescue: ch1 err 0000082c/00000000 ctrl 4003001b
+[Do, 13. Aug 2026, 12:40:57] nouveau 0000:02:00.0: disp: sv-rescue: ch2 err 00000080/00000001 ctrl 0c05001b
+[Do, 13. Aug 2026, 12:40:57] nouveau 0000:02:00.0: disp: sv-rescue: head-0 rgpos 0,0 -> 0,0
+[Do, 13. Aug 2026, 12:40:57] nouveau 0000:02:00.0: disp: sv-rescue: head-1 rgpos 2058,492 -> 1047,582
+[Do, 13. Aug 2026, 12:40:57] nouveau 0000:02:00.0: disp: sv-snap[post]: super 00000150 pending 00000020 intr1 00000000 busy 0 core-ctrl 8f0d001b
+[Do, 13. Aug 2026, 12:40:58] nouveau: soft-dpms: blank-suppression released (wake bridge)
+[Do, 13. Aug 2026, 12:41:00] nouveau 0000:02:00.0: drm: base-1: timeout
+[Do, 13. Aug 2026, 12:41:00] nouveau: evo-forensics base-1: get=0a9 put=0a9 cur=0a9 put_shadow=0a9 max=3f3 (u32 idx)
+[Do, 13. Aug 2026, 12:41:00] nouveau: evo-pushbuf base-1 get 098: 000000a0 f0000000 00040084 00000010 000400c0 fb00007a 00080110 00000000
+[Do, 13. Aug 2026, 12:41:00] nouveau: evo-pushbuf base-1 get 0a0: 00000000 00140800 00030800 00000000 04380780 00007804 0000cf00 00040080
+[Do, 13. Aug 2026, 12:41:00] nouveau: evo-pushbuf base-1 get 0a8: 00000000 00140800 00014b00 00000000 04380780 00007804 0000cf00 00040080
+[Do, 13. Aug 2026, 12:41:00] nouveau: evo-pushbuf base-1 get 0b0: 00000000 000800a0 000000a0 f0000000 00040084 00000010 000400c0 fb00007a
+[Do, 13. Aug 2026, 12:41:00] nouveau: evo-pushbuf base-1 get 0b8: 00080110 00000000 00000000 00140800 0000cb00 00000000 04380780 00007804
+[Do, 13. Aug 2026, 12:41:00] nouveau: evo-pushbuf base-1 get 0c0: 0000cf00
+[Do, 13. Aug 2026, 12:41:02] nouveau 0000:02:00.0: drm: base-1: timeout
+[Do, 13. Aug 2026, 12:41:05] nouveau 0000:02:00.0: drm: base-1: timeout
+[Do, 13. Aug 2026, 12:41:07] nouveau 0000:02:00.0: drm: base-1: timeout
+[Do, 13. Aug 2026, 12:41:10] nouveau 0000:02:00.0: drm: base-1: timeout
+[Do, 13. Aug 2026, 12:41:10] nouveau 0000:02:00.0: disp: sv-snap[pre]: super 00000150 pending 00000020 intr1 00000000 busy 0 core-ctrl 8f0e001b
+[Do, 13. Aug 2026, 12:41:12] nouveau 0000:02:00.0: drm: core notifier timeout
+[Do, 13. Aug 2026, 12:41:12] nouveau 0000:02:00.0: disp: sv-rescue probe: intr0 00000000 intr1 00000000 en 00000370/01ff0000 super 00000150 pending 00000020 busy 0
+[Do, 13. Aug 2026, 12:41:12] nouveau 0000:02:00.0: disp: sv-rescue: ch0 err 00000080/00000200 ctrl 8f0e001b
+[Do, 13. Aug 2026, 12:41:12] nouveau 0000:02:00.0: disp: sv-rescue: ch1 err 0000082c/00000000 ctrl 4003001b
+[Do, 13. Aug 2026, 12:41:12] nouveau 0000:02:00.0: disp: sv-rescue: ch2 err 00000080/00000000 ctrl 8e07001b
+[Do, 13. Aug 2026, 12:41:12] nouveau 0000:02:00.0: disp: sv-rescue: head-0 rgpos 0,0 -> 0,0
+[Do, 13. Aug 2026, 12:41:12] nouveau 0000:02:00.0: disp: sv-rescue: head-1 rgpos 1096,640 -> 937,748
+[Do, 13. Aug 2026, 12:41:12] nouveau 0000:02:00.0: disp: sv-snap[post]: super 00000150 pending 00000020 intr1 00000000 busy 0 core-ctrl 8f0e001b
+[Do, 13. Aug 2026, 12:41:12] nouveau 0000:02:00.0: disp: outp 03:0002:0242: release SOR-1
+[Do, 13. Aug 2026, 12:41:15] nouveau 0000:02:00.0: timeout
+[Do, 13. Aug 2026, 12:41:15] nouveau 0000:02:00.0: disp: ch 2 fini timeout, 8e071008
+[Do, 13. Aug 2026, 12:41:17] nouveau 0000:02:00.0: timeout
+[Do, 13. Aug 2026, 12:41:19] nouveau 0000:02:00.0: disp: outp 03:0002:0242: acquire SOR-1
+[Do, 13. Aug 2026, 12:41:19] nouveau 0000:02:00.0: disp: sv-snap[pre]: super 00000000 pending 00000020 intr1 00000000 busy 0 core-ctrl 490a001b
+[Do, 13. Aug 2026, 12:41:19] nouveau 0000:02:00.0: disp: supervisor 00000010 00000540
+[Do, 13. Aug 2026, 12:41:19] nouveau 0000:02:00.0: disp: head-1: supervisor 1.0
+[Do, 13. Aug 2026, 12:41:19] nouveau 0000:02:00.0: disp: supervisor 00000020 00000550
+[Do, 13. Aug 2026, 12:41:19] nouveau 0000:02:00.0: disp: head-1: supervisor 2.0
+[Do, 13. Aug 2026, 12:41:19] nouveau 0000:02:00.0: disp: head-1: supervisor 2.1 - 148500 khz
+[Do, 13. Aug 2026, 12:41:19] nouveau 0000:02:00.0: disp: head-1: supervisor 2.2
+[Do, 13. Aug 2026, 12:41:19] nouveau 0000:02:00.0: disp: supervisor 00000040 00000550
+[Do, 13. Aug 2026, 12:41:19] nouveau 0000:02:00.0: disp: head-1: supervisor 3.0
+[Do, 13. Aug 2026, 12:41:19] nouveau 0000:02:00.0: disp: sv-snap[post]: super 00000540 pending 00000040 intr1 00000000 busy 0 core-ctrl 2d0b001b

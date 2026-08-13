@@ -44,6 +44,23 @@ Patch 0002 is still compile-and-reasoning only. Its code path sits behind the
 `debug_tx_timeout` module parameter and needs a genuine TX timeout to run,
 which cannot be forced safely.
 
+## Fresh confirmation, 2026-08-13
+
+Still live on the reference machine, on kernel 7.1.8 with the **stock** module
+(the patched one was restored away after the August test). One S3 cycle at
+12:41, triggered by the EVO watchdog's recovery, produced **two** splats, one
+per loop:
+
+    UBSAN: array-index-out-of-bounds in .../forcedeth.c:6240:32
+    index 385 is out of range for type 'u32 [385]'
+
+    suspend path:  pci_pm_suspend -> dpm_run_callback -> [forcedeth]
+    resume path:   pci_pm_resume  -> dpm_run_callback -> [forcedeth]
+
+Two splats per suspend/resume, exactly the count 0001 predicts, and both call
+sites named. `index 385` against `u32 [385]` is the off-by-one stated outright:
+`NV_PCI_REGSZ_MAX/4` is 385, so the valid indices end at 384.
+
 ## Before sending anything upstream
 
 - ~~**Neither patch carries a `Fixes:` tag.**~~ **RESOLVED 2026-08-13.** The
