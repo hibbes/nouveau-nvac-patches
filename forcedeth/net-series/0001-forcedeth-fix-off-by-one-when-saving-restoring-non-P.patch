@@ -1,4 +1,4 @@
-From 486e6cf6bbd194e112de829683fb17f7f0206879 Mon Sep 17 00:00:00 2001
+From 86a2a2107391627b9fc05f947b09fe8afbbed393 Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
 Date: Thu, 13 Aug 2026 15:09:56 +0200
 Subject: [PATCH net 1/2] forcedeth: fix off-by-one when saving/restoring
@@ -16,20 +16,23 @@ and NV_PCI_REGSZ_VER3 is equal to NV_PCI_REGSZ_MAX (0x604), so on a VER3
 device register_size/sizeof(u32) is exactly the array length and the last
 iteration addresses one element past the end.
 
-On suspend that reads one register beyond the claimed window and stores
-the value out of bounds, over whatever member of struct fe_priv follows
-the array. On resume it reads out of bounds and writel()s the result to
-base + 0x604, one dword past the register range the driver asked for.
+The element it lands on is np->name_rx[0..3]: saved_config_space[] is
+followed immediately by char name_rx[IFNAMSIZ + 3], and char needs no
+padding. Nothing observable is corrupted by that, because nv_request_irq()
+rewrites name_rx with sprintf() before it is ever passed to request_irq().
+The bug is the out-of-bounds access itself, which UBSAN reports and which
+CONFIG_UBSAN_TRAP=y turns into a panic, plus an MMIO read and, on resume, an
+MMIO writel() to base + 0x604, one dword past the range the driver mapped:
+
+	np->base = ioremap(addr, np->register_size);
 
 VER1 and VER2 devices stay inside the array, but they too get the stray
 read and the stray write one dword past their own window.
 
-Caught by UBSAN on an MCP79 (Apple Mac mini 3,1, GeForce 9400M IGP)
-during a deep S3 cycle:
+Caught by UBSAN on an Apple Macmini3,1 (MCP79) during a deep S3 cycle:
 
   UBSAN: array-index-out-of-bounds in drivers/net/ethernet/nvidia/forcedeth.c:6225:25
   index 385 is out of range for type 'u32 [385]'
-  CPU: 1 UID: 0 PID: 21996 Comm: kworker/u8:31 Tainted: G S         OE       7.1.6
   Hardware name: Apple Inc. Macmini3,1/Mac-F22C86C8
   Call Trace:
    dump_stack_lvl+0x5d/0x80
@@ -40,13 +43,21 @@ during a deep S3 cycle:
    dpm_run_callback+0x51/0x160
    device_suspend+0x1a2/0x4a0
 
-The splat fires once per loop, so twice per suspend/resume cycle. That
-still holds on 7.1.8: a single S3 cycle on the same machine reports
-:6225 from pci_pm_suspend and :6240 from pci_pm_resume, naming both
-loops, with the same "index 385 is out of range for type 'u32 [385]'".
+Both loops are hit. UBSAN reports each source location only once per module
+load (__ubsan_handle_out_of_bounds() calls suppress_report(), which does
+test_and_set_bit(REPORTED_BIT, ...) on the struct source_location), so the
+two splats land in the first S3 cycle after the module is loaded and later
+cycles are silent even though the access still runs off the end every time.
+In that first cycle line 6225 is reported from pci_pm_suspend and line 6240
+from pci_pm_resume.
 
-Use < instead of <=, which saves and restores exactly register_size
-bytes. No functional change beyond dropping the extra register.
+The same off-by-one was fixed in nv_get_regs() by commit ba9aa134287f
+("forcedeth: fix buffer overflow") in 2012; these two loops were missed.
+The suspend and resume side was reported on LKML in September 2013 by Marc
+Weber, with the same analysis and the same one-character fix, but the patch
+was attached rather than sent inline and the thread ended there.
+
+Use < instead of <=, which saves and restores exactly register_size bytes.
 
 Fixes: 1a1ca86158ee ("[netdrvr] forcedeth: save/restore device configuration space")
 Cc: stable@vger.kernel.org

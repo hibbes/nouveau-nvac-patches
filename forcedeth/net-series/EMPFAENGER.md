@@ -36,11 +36,30 @@ Cc:  Rain River <rain.1986.08.12@gmail.com>
   Seine letzten Commits im Baum stammen von **2016** und tragen
   `jeff@garzik.org`, nicht die Red-Hat-Adresse. Die stammt aus alten
   Sign-offs. Dieselbe Falle wie `bskeggs@nvidia.com`.
-- **Ayaz Abdulla `<aabdulla@nvidia.com>`**, Autor von `86a0f04387bf`, dem
-  `Fixes:`-Commit von 2/2. Seit **2006** nichts mehr im Baum, und NVIDIAs
-  Exchange weist externe Absender ab, wie der Bounce vom 13.08. zeigte. Die
-  späteren "Ayaz"-Treffer im Log sind ein anderer Mensch (Ayaz Siddiqui,
-  Intel).
+- **Ayaz Abdulla `<aabdulla@nvidia.com>`**. **KORREKTUR 13.08. abends:** die
+  erste Fassung dieser Datei behauptete, er sei seit 2006 inaktiv. Das war
+  falsch und beruhte auf einer schlampigen Suche (`--author='Ayaz'` trifft
+  Ayaz Siddiqui bei Intel und Omair Abdullah, also andere Menschen). Tatsäch-
+  lich hat er bis **13.04.2010** von dieser Adresse committet, darunter
+  mehrere forcedeth-Patches 2008 und 2009, einer davon in `nv_tx_timeout`
+  selbst. Er bleibt trotzdem draußen, aber aus dem richtigen Grund: eine
+  sechzehn Jahre alte Firmenadresse, und NVIDIAs Exchange weist externe
+  Absender ab, wie der Bounce vom 13.08. gezeigt hat.
+  Nebenbei ist er ohnehin nicht mehr der Autor des `Fixes:`-Commits von 2/2,
+  siehe unten.
+
+## Nachtrag 13.08. abends: der Fixes-Tag von 2/2 hat gewechselt
+
+Die adversariale Gegenprüfung hat gezeigt, dass `86a0f04387bf` den Überlauf
+**verkleinert** und nicht verursacht hat. Eingeführt wurde die Dump-Schleife
+2005 von Manfred Spraul (`c2dba06dae7d`) mit fester Obergrenze `0x400`, während
+`ioremap` nur `NV_PCI_REGSZ` = 0x270 mappte. Der Tag zeigt jetzt dorthin.
+Spraul steht nicht im Verteiler: der Commit ist 21 Jahre alt.
+
+Ausserdem neu im Verteiler-Umfeld, aber bewusst **nicht** angeschrieben:
+**David Decotigny**, der 2012 mit `ba9aa134287f` denselben Fehler in
+`nv_get_regs()` behoben hat. Sein Fix wird im Cover und in 1/2 zitiert, ein Cc
+wäre aber aufdringlich, er hat mit dieser Einreichung nichts zu tun.
 
 ## Formregeln, gegen die Quelle geprüft
 

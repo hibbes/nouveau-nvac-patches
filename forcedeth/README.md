@@ -57,8 +57,13 @@ per loop:
     suspend path:  pci_pm_suspend -> dpm_run_callback -> [forcedeth]
     resume path:   pci_pm_resume  -> dpm_run_callback -> [forcedeth]
 
-Two splats per suspend/resume, exactly the count 0001 predicts, and both call
-sites named. `index 385` against `u32 [385]` is the off-by-one stated outright:
+Two splats, one per loop, with both call sites named. **Wichtig, korrigiert am
+13.08. abends:** das ist KEINE Rate pro S3-Zyklus. UBSAN meldet jede Quellstelle
+nur **einmal pro Modul-Ladevorgang** (`__ubsan_handle_out_of_bounds()` ruft
+`suppress_report()`, das `test_and_set_bit(REPORTED_BIT, ...)` auf der
+`struct source_location` setzt). Nur der erste S3 nach dem Laden splattet, jeder
+weitere ist still, auch ungepatcht. Ein Vorher/Nachher-Test taugt deshalb nur,
+wenn beide Läufe der jeweils erste S3 nach frischem Laden sind. `index 385` against `u32 [385]` is the off-by-one stated outright:
 `NV_PCI_REGSZ_MAX/4` is 385, so the valid indices end at 384.
 
 ## Before sending anything upstream

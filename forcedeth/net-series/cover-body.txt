@@ -1,10 +1,3 @@
-From 1d4a8a881bb2a0e487daeaf94516c188e10be5c3 Mon Sep 17 00:00:00 2001
-From: Marek Czernohous <marek@czernohous.de>
-Date: Thu, 13 Aug 2026 17:34:40 +0200
-Subject: [PATCH net 0/2] forcedeth: two register-window bounds fixes
-
-*** BLURB HERE ***
-
 Two bounds fixes in forcedeth, both in the same shape: a loop that walks
 the register window one step too far. They are independent of each other
 and touch different functions.
@@ -126,16 +119,3 @@ AI assistance
   your time, so it seems worth saying that the checking pass is part of
   the process here and not a flourish. I reviewed the result, I
   understand the code, and I take responsibility for it.
-
-Marek Czernohous (2):
-  forcedeth: fix off-by-one when saving/restoring non-PCI config space
-  forcedeth: stop the tx_timeout register dump past the requested window
-
- drivers/net/ethernet/nvidia/forcedeth.c | 6 +++---
- 1 file changed, 3 insertions(+), 3 deletions(-)
-
-
-base-commit: 9006c116dd111d457bf5d074990210f70a4ad2c8
--- 
-2.54.0
-
