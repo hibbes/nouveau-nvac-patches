@@ -84,8 +84,14 @@ Testing
   safely on this machine. It rests on the arithmetic in the patch and
   on the build below.
 
-  Build: <<<PLATZHALTER, allmodconfig W=1 laeuft noch, Ergebnis
-  eintragen bevor irgendetwas gesendet wird>>>
+  Build, and its limits: the tree is configured allmodconfig, and
+  drivers/net/ethernet/nvidia/ builds clean under it with W=1, no
+  warnings from either patch. I have not run a full allmodconfig or
+  allyesconfig build of the whole tree, which is what
+  maintainer-netdev.rst asks for; on the two cores I have that is a
+  multi-day proposition. If that is a blocker, say so and I will queue
+  it before reposting rather than send you something I have not actually
+  measured.
 
 Two checkpatch notes on 1/2, both deliberate
 
