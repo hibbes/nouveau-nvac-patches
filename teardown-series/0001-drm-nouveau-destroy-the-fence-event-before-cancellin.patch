@@ -66,8 +66,6 @@ index edbe9e08ba0f..4a3698dc2cd1 100644
  	fctx->dead = 1;
  
  	/*
-
-base-commit: c21bb4193868a8de71fc4693fa741e195fdf5d86
 -- 
 2.54.0
 

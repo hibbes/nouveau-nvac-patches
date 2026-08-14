@@ -1,3 +1,7 @@
+From d75155bc2b93b1e8eaef45973cfaa091c976d61c Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
+Date: Fri, 14 Aug 2026 11:59:03 +0200
+Subject: [PATCH 0/3] drm/nouveau: teardown ordering fixes for events and work
 Three teardown fixes in nouveau, all the same shape: something that can
 still run after the thing it points at has been torn down or freed.
 
@@ -86,3 +90,20 @@ AI assistance
   nvif_event_constructed() guard, not the absence of the call. The
   commit message now says that. I reviewed the result, I understand the
   code, and I take responsibility for it.
+
+Marek Czernohous (3):
+  drm/nouveau: destroy the fence event before cancelling its work
+  drm/nouveau: cancel the DP IRQ work before freeing the connector
+  drm/nouveau: don't dereference outp before checking it in
+    nouveau_dp_irq
+
+ drivers/gpu/drm/nouveau/nouveau_connector.c | 1 +
+ drivers/gpu/drm/nouveau/nouveau_dp.c        | 4 +++-
+ drivers/gpu/drm/nouveau/nouveau_fence.c     | 2 +-
+ 3 files changed, 5 insertions(+), 2 deletions(-)
+
+
+base-commit: c21bb4193868a8de71fc4693fa741e195fdf5d86
+-- 
+2.54.0
+

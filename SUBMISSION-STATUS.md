@@ -260,11 +260,12 @@ niemand kennt es gerade besser. **Umgesetzt, siehe Spur 7.**
 
 | | |
 |---|---|
-| Status | **inhaltlich fertig, wartet auf Freigabe zum Versand** |
+| Status | **fertig und gebaut, wartet auf Freigabe zum Versand** |
 | Betreff | `[PATCH 0/3] drm/nouveau: teardown ordering fixes for events and work` |
 | Branch | `nouveau-event-teardown` in `~/linux-nouveau-patches` |
 | Basis | `c21bb4193868` (dieselbe wie die Viererserie) |
-| checkpatch | `--strict` sauber auf allen dreien |
+| checkpatch | `--strict` sauber auf allen dreien **und auf dem Cover** |
+| Bau | **Vollbau 14.08.2026 01:06, rc=0**, 0 Warnungen, 0 Fehler, `Module.symvers` und `nouveau.ko` erzeugt. Bewusst der volle Kernel und nicht nur `make M=`, sonst haette `modpost` mangels `Module.symvers` gar nicht aufgeloest und die Aussage ueber das Binden waere ungedeckt gewesen |
 
 | Patch | Gegenstand | Fixes |
 |---|---|---|
