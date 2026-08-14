@@ -1,4 +1,4 @@
-From fd1188f38ffc33934a8f26b23f1c8475f60a2295 Mon Sep 17 00:00:00 2001
+From 4033466f385bcf8c67c275439aef664e9a69911d Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
 Date: Thu, 13 Aug 2026 10:20:49 +0200
 Subject: [PATCH 2/3] drm/nouveau: cancel the DP IRQ work before freeing the
@@ -28,9 +28,11 @@ There is no cancel_work_sync() for irq_work anywhere in the driver, so
 nothing else covers this. Add it after the event teardown, where no
 further work can be queued, and before anything is freed.
 
-Found by the Sashiko review bot on an unrelated posting, and confirmed
-against the source.
+Reported by the Sashiko review bot as a pre-existing issue, in its review
+of an earlier nv04 FIFO series of mine, and confirmed against the source.
 
+Reported-by: sashiko-bot <sashiko-bot@kernel.org>
+Link: https://sashiko.dev/#/patchset/20260812231330.705425-1-mczernohous@gmail.com?part=1
 Fixes: 773eb04d14a1 ("drm/nouveau/disp: expose conn event class")
 Cc: stable@vger.kernel.org
 Assisted-by: Claude:claude-opus-5
