@@ -30,20 +30,24 @@ So this is not a new discovery. It is the same bug at the two sites the
 
 How bad is it, stated plainly
 
-  ioremap() rounds the requested length up to page granularity and the
-  BAR is at least page aligned, so none of these accesses leaves the
-  mapping the CPU actually has, and no fault is expected on any
-  architecture with PAGE_SIZE >= 4K. What they do leave is the window
-  the driver asked for, and in 1/2 the array the driver declared.
+  1/2 writes one u32 past the end of a declared array, on a suspend
+  path, on every suspend of a VER3 device. That is an out-of-bounds
+  store, it is what UBSAN reports, and with CONFIG_UBSAN_TRAP=y it is a
+  trap that aborts the running kernel code. That is the stable case, and
+  I think it stands on its own: memory safety, reproduced on hardware,
+  one character to fix, no behavioural change for anyone else.
 
-  For 1/2 that array overrun is the part that matters for stable: it is
-  an out-of-bounds store into struct fe_priv, which UBSAN reports and
-  which CONFIG_UBSAN_TRAP=y turns into a panic on a suspend path. Which
-  member it lands in and why nothing observable is corrupted is spelled
-  out in the patch, so reviewers can judge that for themselves rather
-  than take my word for the severity.
+  What I will not claim is drama beyond that. The element it lands in is
+  np->name_rx, a scratch string that nv_request_irq() rewrites with
+  sprintf() before it is ever used, so on a kernel without UBSAN_TRAP
+  nothing observable is corrupted. The patch says which member and why,
+  so you can judge the severity yourself instead of taking my word.
 
-  2/2 is the milder of the two and carries no stable tag.
+  The MMIO side of both patches is milder still. ioremap() rounds the
+  requested length up to page granularity, so these accesses stay inside
+  the page the CPU has mapped and no fault is expected on any
+  architecture with PAGE_SIZE >= 4K. What they leave is the window the
+  driver asked for. 2/2 is only that, and carries no stable tag.
 
 Behaviour change in 2/2, so it is not buried in the patch
 

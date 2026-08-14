@@ -1,4 +1,4 @@
-From 1d4a8a881bb2a0e487daeaf94516c188e10be5c3 Mon Sep 17 00:00:00 2001
+From c9eebd11b46e23e09b61e512d2f40378e3cf3404 Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
 Date: Thu, 13 Aug 2026 15:10:18 +0200
 Subject: [PATCH net 2/2] forcedeth: stop the tx_timeout register dump past the
@@ -30,8 +30,12 @@ multiple of 32 would overrun by a full row rather than by a remainder.
 
 To be precise about the severity: ioremap() rounds the length up to page
 granularity and the BAR is at least page aligned, so on any architecture
-with PAGE_SIZE >= 4K these reads still land inside the mapped page and
-inside the BAR, which requires pci_resource_len() >= register_size. They
+with PAGE_SIZE >= 4K these reads still land inside the mapped page. They
+also land inside the BAR in practice, since the smallest PCI BAR is a
+page and the driver only accepts a region with pci_resource_len() >=
+register_size, but note that the length check alone would not guarantee
+it: a BAR of exactly 0x604 bytes would pass it and still not contain
+0x61f. They
 leave the window the driver requested, not the mapping the CPU has. That
 is still a driver reading registers it did not ask for, and it is trivial
 to avoid, but nobody should expect a fault from it.
