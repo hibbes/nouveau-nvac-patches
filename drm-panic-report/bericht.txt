@@ -3,6 +3,16 @@ Subject: [BUG] nouveau: drm_panic get_scanout_buffer() maps the BO from
 
 Hi,
 
+In the cover letter of
+
+  https://lore.kernel.org/nouveau/20260806085228.1848994-1-mczernohous@gmail.com/
+
+I wrote that this was "a separate, pre-existing problem which I have
+not yet reported; I will do so on its own".  This is that report.  It
+is a new thread rather than a follow-up there, because the subsystem
+and the maintainers are different ones and that series has since been
+superseded.
+
 nouveau's drm_panic scanout callback establishes a CPU mapping while
 the machine is already panicking.  nv50_wndw_get_scanout_buffer()
 calls nouveau_bo_map(), which takes two sleeping locks and then, for
@@ -287,8 +297,13 @@ later regression.  The function body is byte-identical between
 since, but not this function.
 
 As far as I can see this has not been reported for nouveau before.
-That search is incomplete: lore.kernel.org is blocked from this
-machine by Anubis, so I only searched mirrors and the web.
+lore.kernel.org is blocked from this machine, so I searched the
+mail-archive.com mirror of dri-devel instead: "get_scanout_buffer"
+returns the original nv50+ drm_panic series, two build-robot reports
+against wndw.c, and my own cover letter quoted above; "drm_panic
+ioremap" returns only the ttm_bo_kmap_try_from_panic() series.  If
+somebody with working lore access finds a duplicate, please point me
+at it.
 
 7. Why the existing panic-safe helpers do not simply fix it
 -----------------------------------------------------------
@@ -342,65 +357,71 @@ created during panic.  It also guards with
 This looks like a pattern worth auditing across drm_panic providers
 rather than a single nouveau bug.
 
-8. Possible directions (not a patch, not measured)
---------------------------------------------------
+8. What I found when I looked for a fix
+---------------------------------------
 
-I see two shapes that fit nouveau, and I have implemented neither.
+I went looking for the obvious fix and did not find one that is
+obviously right, which is the main reason this is a report and not a
+patch.  What follows is reconnaissance, not a proposal: two shapes I
+looked at and the traps I ran into, in case it saves someone the
+same walk.  You know this code better than I do, and there may well
+be a third shape I did not see.
 
 (A) Establish the mapping outside panic context and only consume it
-    inside.  drm_panic.h:115-120 explicitly blesses that location:
-    anything set up by prepare_fb and torn down by cleanup_fb is
-    safe to access, because the framebuffer is pinned.  So map in
-    nv50_wndw_prepare_fb() (which today only pins), unmap in
-    nv50_wndw_cleanup_fb(), and have get_scanout_buffer() use
-    nvbo->kmap.virtual or return an error if it is NULL.
+    inside.  drm_panic.h:115-120 blesses that location: anything set
+    up by prepare_fb and torn down by cleanup_fb is safe to access,
+    because the framebuffer is pinned.  nv50_wndw_prepare_fb()
+    already pins and would be the natural place to map.
 
-    Costs and traps that would have to be handled: permanently
-    occupied BAR1 aperture plus kernel VA for every scanout FB, and
-    the buffer dropping out of the io_reserve_lru that nouveau uses
-    to resolve BAR1 pressure; prepare_fb/cleanup_fb are shared by
-    nv50_wndw_helper and nv50_wndw_primary_helper while
-    get_scanout_buffer only exists on the primary, so cursor and
-    overlay BOs would be mapped too unless restricted; and
-    nvbo->kmap is a single non-refcounted field, so a second
-    ttm_bo_kmap() overwrites and leaks the previous mapping.
+    What made me stop: it permanently occupies BAR1 aperture plus
+    kernel VA for every scanout FB, and takes the buffer out of the
+    io_reserve_lru that nouveau uses to resolve BAR1 pressure.
+    prepare_fb and cleanup_fb are shared between nv50_wndw_helper
+    and nv50_wndw_primary_helper while get_scanout_buffer only
+    exists on the primary, so cursor and overlay BOs would be mapped
+    too unless that is restricted.  And nvbo->kmap is a single
+    non-refcounted field, so a second ttm_bo_kmap() overwrites and
+    leaks the previous mapping.  On a 256 MB part those are not
+    theoretical costs, but I cannot judge what they are worth on a
+    modern card.
 
 (B) An amdgpu-style set_pixel with no CPU mapping of the FB at all.
-    nouveau already has a sliding BAR0 window on Tesla:
+    nouveau has a sliding BAR0 window on Tesla:
     nv50_instmem_set_bar0_window_addr() writes addr >> 16 to
-    0x001700 (nvkm/subdev/instmem/nv50.c:397-401) and the data is
-    then reachable at 0x700000 + (addr & 0xfffff) (nv50.c:56-73),
-    on device->pri, which is ioremapped once at probe
+    0x001700 (nvkm/subdev/instmem/nv50.c:397-401), data then
+    reachable at 0x700000 + (addr & 0xfffff) (nv50.c:56-73), on
+    device->pri, which is ioremapped once at probe
     (nvkm/engine/device/base.c:3173).  drm_panic does not require a
-    mapping when set_pixel is provided: drm_panic.c:936 only checks
-    that one of set_pixel, pages or map[0] is present.
+    mapping when set_pixel is provided (drm_panic.c:936).
 
-    Traps here: nv50_instobj_wr32_slow() must not be reused, since
-    it takes spin_lock_irqsave(&imem->base.lock), which a stopped
-    CPU may hold; the window writes would have to be open-coded.
-    nvkm_vram_addr() returns ~0ULL for non-contiguous VRAM
-    (nvkm/subdev/fb/ram.c:65-71), so contiguity must be checked,
-    not assumed, even though prepare_fb pins with contig = true.
-    And nouveau's own nv50_set_pixel()/nv50_set_pixel_swizzle()
-    currently write through iosys_map_wr(&sb->map[0], ...), so they
-    would have to be converted as well.
+    What made me stop: nv50_instobj_wr32_slow() cannot be reused
+    because it takes spin_lock_irqsave(&imem->base.lock), which a
+    stopped CPU may hold, so the window writes would have to be
+    open-coded.  nvkm_vram_addr() returns ~0ULL for non-contiguous
+    VRAM (nvkm/subdev/fb/ram.c:65-71), so contiguity has to be
+    checked rather than assumed, even though prepare_fb pins with
+    contig = true.  And this is a Tesla-specific mechanism, so it
+    says nothing about Fermi and later.
 
-Note that nouveau today has no persistent BAR1 mapping to reuse:
-git grep ioremap over drivers/gpu/drm/nouveau only yields BAR0/PRI,
-the BAR2/PRAMIN windows in instmem and dispnv04/hw.c.
-nouveau_ttm.c only sets up MTRR and a WC memtype over the BAR1
-range, which is not a mapping.  So (A) or (B) both mean new
-infrastructure, and which one is right is a maintainer decision, not
-mine.
+One thing that is not a matter of taste: nouveau has no persistent
+BAR1 mapping to reuse today.  git grep ioremap over
+drivers/gpu/drm/nouveau yields only BAR0/PRI, the BAR2/PRAMIN
+windows in instmem, and dispnv04/hw.c.  nouveau_ttm.c sets up MTRR
+and a WC memtype over the BAR1 range, which is not a mapping.  So
+either shape means new infrastructure.
 
-A minimal stable-friendly first step would be to not map at all in
-the callback and return an error when no pre-existing mapping is
-available.  That loses the panic screen on nv50+ for now, but
-drm_panic is documented as best effort, and losing the screen is
-what happens today anyway, only louder.
+Two things I would ask rather than assert:
 
-Whatever the fix, please note that replacing only the ioremap leaves
-violations (a) and (b) in place.
+ - Is losing the panic screen on nv50+ an acceptable interim state?
+   Not mapping at all and returning an error would be a small,
+   backportable change, and the screen is lost today anyway, only
+   more loudly.  But that trades a feature for a crash fix and I do
+   not know how you weigh that.
+
+ - Should whatever lands here also cover violations (a) and (b)?
+   Replacing only the ioremap leaves the sleeping lock and the
+   GFP_KERNEL allocation in place, and those are the ones that would
+   hang rather than die.
 
 Happy to test patches on the NVAC box, and to run lkdtm
 PANIC_IN_HARDIRQ there if a kernel with CONFIG_LKDTM is wanted.

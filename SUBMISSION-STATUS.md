@@ -244,9 +244,12 @@ Einreichung wäre zu klären, ob `soft_dpms` überhaupt noch etwas beiträgt.
 
 ## Weitere offene Punkte aus den Covers
 
-- Der im v3-Cover versprochene eigene Bericht zum **drm_panic-ioremap** (Panik
-  beim Scanout-Pfad, `nv50_wndw_get_scanout_buffer` -> `ttm_bo_kmap` ->
-  `__ioremap_caller`, `kernel BUG at mm/vmalloc.c:3212`) steht seit 02.06. aus.
+- **ERLEDIGT 15.08.2026:** der versprochene Bericht zum **drm_panic-ioremap**
+  ist geschrieben und liegt in [`drm-panic-report/`](drm-panic-report/), noch
+  nicht gesendet. **Korrektur einer Datumsangabe, die hier falsch stand:** der
+  02.06. ist das Datum des *Absturzes*. Das *Versprechen* steht im **v2**-Cover
+  (`20260806085228.1848994-1-mczernohous@gmail.com`, 06.08.2026), nicht im
+  gesendeten v3-Cover. Es war also neun Tage alt, nicht zweieinhalb Monate.
 - `Fixes:`-Tags fehlen in beiden forcedeth-Patches.
 - Die `spinlock_t`-CHECK von checkpatch ist nie abgearbeitet.
 - **Sicherheit:** das Gmail-App-Passwort steht im Klartext als
