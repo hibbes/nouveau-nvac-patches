@@ -45,6 +45,27 @@ Immer die vollständige Message-ID aus diesem File verwenden.
 | Antworten auf v3 | **keine, seit über zwei Monaten** (Briefing: "weiterhin keine Reaktion") |
 | 0003 | bewusst aus v2/v3 herausgenommen (schläft unter `mode_config.mutex`) |
 
+### Stand 15.08.2026: der Fehler lebt, die Serie ist verrottet
+
+Gegen `c21bb4193868` geprüft, nur lesend mit `git apply --check`:
+
+| Patch | Ergebnis |
+|---|---|
+| `0001` mcp79-msi-rearm | **passt sauber** |
+| `0002` kms-sor-null-guard | **passt nicht mehr** |
+
+**0002 scheitert nicht inhaltlich, sondern an fremder Kontextdrift.** Der Fehler
+selbst steht unverändert in Mainline: `dispnv50/disp.c:1568` macht weiterhin
+`struct nv50_head *head = nv50_head(nv_encoder->crtc);` ohne NULL-Prüfung, und
+in der ganzen Funktion gibt es keinen Guard. Verschoben hat sich nur die
+Signatur, durch `5164f7e7ff8e ("drm: Rename struct drm_atomic_state to
+drm_atomic_commit")`. Der Parameter heißt jetzt `struct drm_atomic_commit *state`.
+
+**Folge:** vor einem Ping oder einem Neuversand als v4 muss 0002 rebased werden.
+Das ist eine Kontextanpassung, keine Neufassung. Danach ist ein v4 mit dem
+Hinweis auf die zwei Monate Stille die naheliegende Form, ein bloßer Ping auf
+einen Thread, dessen Patches nicht mehr anwenden, hilft niemandem.
+
 **Erledigt seit dem letzten Stand:** der v3-Thread wird inzwischen vom
 Morgen-Briefing gepollt (`~/.claude/morning-briefing.sh`, Abschnitt i-b, Baseline
 3 Mails), ebenso der nv04-v2-Thread (ii-b, Baseline 4).
