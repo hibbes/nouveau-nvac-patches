@@ -14,7 +14,7 @@ Anubis blockiert ist).
 | 4 | forcedeth (netdev) | **GESENDET 15.08.2026 21:54**, 10 Empfänger, 0 abgelehnt |
 | 5 | nv04-FIFO v3, **Viererserie** | **GESENDET 13.08.2026 01:13**, 5x SMTP 250 |
 | 6 | Tesla-Recovery (ex 5/5) | zurückgestellt für v4, zwei Codefehler, siehe unten |
-| 7 | Teardown (3 Patches) | **GESENDET 15.08.2026 21:54**, 7 Empfänger, 0 abgelehnt |
+| 7 | Teardown (3 Patches) | gesendet 15.08. 21:54; **1/3 am selben Abend zurückgezogen** (echter Regress, sashiko-bot), 2/3 und 3/3 stehen |
 | 8 | drm_panic-Bericht | **GESENDET 15.08.2026 18:07**, 12 Empfänger, 0 abgelehnt |
 
 Alle vier gesendeten Threads werden vom Morgen-Briefing gepollt.

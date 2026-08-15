@@ -42,3 +42,46 @@ gegengeprueft: 3 In-Reply-To-Zeilen, 4 In-Body-From-Zeilen.
 - Kopfblock jeder Datei endet sauber mit einer Leerzeile (der erste Test dazu
   war zu naiv und schlug faelschlich Alarm, weil git format-patch die
   Betreffzeile umbricht).
+
+## NACHTRAG 15.08.2026 22:35: 1/3 ZURUECKGEZOGEN
+
+Der sashiko-bot hat 20 Minuten nach dem Versand geantwortet und in 1/3
+einen [Critical]-Befund gemeldet. Er hat recht, selbst am Quelltext
+nachgeprueft.
+
+Rueckzugsmail: 178682552848.3774290.16460050233438707000@gmail.com
+(Antwort auf die Bot-Mail 20260815200914.8A1131F000E9@smtp.kernel.org,
+haengt damit direkt unter 1/3), 8 Empfaenger, 0 abgelehnt.
+Wortlaut in RUECKZUG-1von3-2026-08-15.txt.
+
+**Der Fehler:** die alte Reihenfolge war nicht zufaellig sicher, sondern
+tragend. nouveau_fence_context_kill() signalisiert alle Fences, und
+dma_fence_add_callback() kehrt bei einem bereits signalisierten Fence
+schon bei dma-fence.c:707-710 mit -ENOENT zurueck, ohne
+enable_signaling() je zu erreichen. Nach dem kill ist
+nouveau_fence_enable_signaling() also nicht mehr erreichbar, und der
+dtor danach hat niemanden mehr, mit dem er rennen koennte.
+
+Der Patch zog den dtor genau dorthin, wo die Fences noch leben. Nichts
+serialisiert die beiden: context_del nimmt gar keine Sperre,
+enable_signaling laeuft unter fence->lock (= fctx->lock,
+nouveau_fence.c:218-219), und der dtor kann die nicht nehmen, weil der
+nvif-ioctl schlafen darf. Das Fenster steht dann ueber die ganze Dauer
+von cancel_work_sync() offen.
+
+**Weg fuer v2, noch zu pruefen:** den Drain nach hinten schieben statt
+den dtor nach vorne.
+
+    nouveau_fence_context_kill(fctx, 0);
+    nvif_event_dtor(&fctx->event);
+    cancel_work_sync(&fctx->uevent_work);
+
+**2/3 und 3/3 sind nicht betroffen** und stehen weiter zur Uebernahme.
+
+**Und die eigentliche Lehre:** die eigene Nachpruefung vom selben Abend
+hatte denselben Mechanismus gefunden, ihn aber als Formulierungsproblem
+im Commit-Text eingestuft ("die Begruendung ist zu stark, streich den
+Satz"). Der Empfehlung wurde gefolgt, ohne die naheliegende Anschluss-
+frage zu stellen: wenn die Begruendung nicht traegt, traegt dann der
+Patch? Ein Befund ueber eine Begruendung ist immer auch ein Verdacht
+gegen die Sache selbst.

@@ -1,0 +1,48 @@
+The bot is right, and this is worse than a wording problem: 1/3 does
+introduce the race, it does not merely fail to rule it out.  Please
+do not apply 1/3.  2/3 and 3/3 are independent of it and unaffected.
+
+What I missed is why the old order was safe in the first place.  It was
+not an accident of ordering, it was load-bearing:
+
+  nouveau_fence_context_kill() signals every fence on fctx->pending,
+  and dma_fence_add_callback() returns -ENOENT for an already signalled
+  fence before it ever reaches __dma_fence_enable_signaling()
+  (drivers/dma-buf/dma-fence.c:707-710).  So once the kill has run,
+  nouveau_fence_enable_signaling() is no longer reachable for those
+  fences, and nvif_event_dtor() afterwards has nobody left to race
+  with.
+
+Moving the dtor to the front puts it exactly where those fences are
+still live, so nvif_event_allow() can be in flight on another CPU with
+nvif_event_constructed() already evaluated to true.  There is nothing to
+serialise the two: nouveau_fence_context_del() takes no lock at all,
+enable_signaling() runs under fence->lock, which for nouveau is
+fctx->lock (nouveau_fence.c:218-219), and the dtor cannot take that,
+since the nvif ioctl may sleep and fctx->lock is taken with interrupts
+off.  The window is then held open for the whole of cancel_work_sync(),
+which can block arbitrarily long.
+
+So my patch traded a narrow re-arm window for a wider NULL-deref window.
+That is a bad trade and my commit message argued for it with a "guard"
+that is a plain unsynchronised read of object->client.
+
+The re-arm problem the patch was aimed at is real, but the fix has to
+keep the kill in front of the dtor.  The obvious shape is to move the
+drain to the back instead of the dtor to the front:
+
+	nouveau_fence_context_kill(fctx, 0);
+	nvif_event_dtor(&fctx->event);
+	cancel_work_sync(&fctx->uevent_work);
+
+The kill closes enable_signaling(), the dtor then stops the handler, and
+the drain last picks up anything the handler queued on its way out.  I
+want to convince myself properly that kill-before-drain is safe, rather
+than send a second version tonight on the strength of it looking right,
+so I will post a v2 once I have.
+
+Thanks to the bot for catching this before anyone applied it.  For what
+it is worth, my own review pass had found the same mechanism a few hours
+earlier and I mis-filed it as a wording problem in the commit message
+instead of asking whether the patch itself was wrong.  That one is on
+me.
