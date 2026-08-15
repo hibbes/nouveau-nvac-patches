@@ -1,4 +1,4 @@
-From 9067f5a3669bd41d91d0dfef651bf9b71d2fa2b7 Mon Sep 17 00:00:00 2001
+From 07036bc8f29221311c71843144c687668b2646e0 Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
 Date: Thu, 13 Aug 2026 10:21:10 +0200
 Subject: [PATCH 3/3] drm/nouveau: don't dereference outp before checking it in

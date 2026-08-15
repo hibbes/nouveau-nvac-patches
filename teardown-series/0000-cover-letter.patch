@@ -1,6 +1,6 @@
-From 9067f5a3669bd41d91d0dfef651bf9b71d2fa2b7 Mon Sep 17 00:00:00 2001
+From 07036bc8f29221311c71843144c687668b2646e0 Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
-Date: Fri, 14 Aug 2026 14:52:56 +0200
+Date: Sat, 15 Aug 2026 21:47:35 +0200
 Subject: [PATCH 0/3] drm/nouveau: teardown ordering fixes for events and work
 
 Three teardown fixes in nouveau, all the same shape: something that can
@@ -13,7 +13,8 @@ pre-existing issues in its review of my nv04 FIFO series,
 
 naming nouveau_fence_context_del() and nouveau_connector_destroy()
 directly. It was right about both. 1/3 and 2/3 carry a Reported-by
-accordingly. 3/3 is mine, found while reading the same function.
+accordingly. 3/3 is mine, found while following the irq_work of 2/3
+into its handler, which is nouveau_dp_irq().
 
 1/3 nouveau_fence_context_del() cancels the uevent work first and drops
     the event afterwards. In between, the event is still armed and
@@ -45,13 +46,14 @@ freed object the work then touches. 3/3 is a NULL dereference sitting
 above the function's own NULL test.
 
 I also looked one level up, since it would have been the obvious next
-instance. drm->hpd_work is drained, in nouveau_display_fini(), right
-after the hotplug events are blocked. That drain is guarded by
-"if (!runtime && !drm->headless)", and the same guard repeats in
-nv04_display_fini() and nv50_display_fini(). I am not proposing a fourth
-patch on the strength of that guard, because I could not convince myself
-either way about the paths it exempts, and I would rather send three
-patches I can argue than four where the last one is a guess.
+instance. drm->hpd_work is drained in nouveau_display_fini(), right
+after the hotplug events are blocked, under
+"if (!runtime && !drm->headless)". That guard does not exempt the
+teardown path: nouveau_drm.c:597 calls nouveau_display_fini(dev, false,
+false) immediately before nouveau_display_destroy(), so runtime is
+false there. The runtime exemption belongs to the suspend path
+(nouveau_display.c:781), which frees nothing. So there is no fourth
+patch here.
 
 Testing
 

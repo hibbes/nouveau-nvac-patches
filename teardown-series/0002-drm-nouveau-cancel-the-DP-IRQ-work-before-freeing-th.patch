@@ -1,4 +1,4 @@
-From 4033466f385bcf8c67c275439aef664e9a69911d Mon Sep 17 00:00:00 2001
+From a9b28286d2dd8f1e7df87d06b06400de6f7bf8c9 Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
 Date: Thu, 13 Aug 2026 10:20:49 +0200
 Subject: [PATCH 2/3] drm/nouveau: cancel the DP IRQ work before freeing the
