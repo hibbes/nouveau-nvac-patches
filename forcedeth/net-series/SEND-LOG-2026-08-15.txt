@@ -1,0 +1,38 @@
+# Versandprotokoll forcedeth-Serie
+
+Gesendet: 2026-08-15 21:54 CEST
+Betreff:  [PATCH net 0/2] forcedeth: two register-window bounds fixes
+Basis:    netdev/main = 9006c116dd11
+
+Message-IDs (flaches Threading):
+  0/2  178682367884.3748309.5288746298966501007@gmail.com
+  1/2  178682367885.3748309.10595890901761762683@gmail.com
+  2/2  178682367886.3748309.6978554332066826294@gmail.com
+
+To: netdev@vger.kernel.org
+Cc: Rain River <rain.1986.08.12@gmail.com>, Zhu Yanjun <zyjzyj2000@gmail.com>,
+    Andrew Lunn <andrew+netdev@lunn.ch>, "David S. Miller" <davem@davemloft.net>,
+    Eric Dumazet <edumazet@google.com>, Jakub Kicinski <kuba@kernel.org>,
+    Paolo Abeni <pabeni@redhat.com>, Tobias Diedrich <tobiasdiedrich@gmail.com>,
+    linux-kernel@vger.kernel.org
+
+Ergebnis: 10 Empfaenger, 0 abgelehnt. Kein Bounce.
+Im Archiv: netdev 3 Mails.
+
+Bewusst NICHT im Verteiler: Jeff Garzik (Adresse aus alten Sign-offs, seit
+2016 inaktiv) und Ayaz Abdulla (NVIDIA, seit 2010 inaktiv, Domain weist
+externe Post ab). Begruendung in EMPFAENGER.md.
+
+## Pruefungen vor dem Versand
+
+- Zwei adversariale Runden (13.08. mit 41 Rohbefunden, 14.08.), dazu eine
+  Delta-Nachpruefung am 15.08. auf die danach geaenderten Textteile.
+  Dabei zwei eigene Fehler gefunden: die BAR-Begruendung war durch eine
+  vermeintlich vorsichtigere Formulierung FALSCH geworden (PCI-Memory-BARs
+  haben immer Zweierpotenzgroesse, ein BAR von 0x604 Byte existiert nicht),
+  und das UBSAN-Zitat war staerker gekuerzt als der Vermerk zugab.
+- allmodconfig mit W=1 ueber den ganzen Baum, rc=0, 52251 Schritte,
+  0 Compilerwarnungen, forcedeth.c 0 Warnungen. Rund 30 Stunden Laufzeit.
+- checkpatch: Cover und 2/2 sauber, auf 1/2 drei bewusst stehengelassene
+  Meldungen (zitiertes UBSAN-Log zu lang, zweimal Leerzeichen um '/', wie
+  die Datei es selbst schreibt). Beide im Cover begruendet.

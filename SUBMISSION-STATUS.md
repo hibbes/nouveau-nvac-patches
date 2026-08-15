@@ -11,10 +11,10 @@ Anubis blockiert ist).
 | 1 | NVAC-Stabilität (0001, 0002) | **v3 auf der Liste**, seit 11.06. keine Reaktion |
 | 2 | nv04-FIFO v1 (0004, 0006) | **zurückgezogen** 25.07. |
 | 3 | nv04-FIFO v2 (3 Patches) | **gesendet** 06.08., keine Reaktion |
-| 4 | forcedeth (netdev) | fertig, **nicht gesendet**; `Fixes:` seit 13.08. ermittelt, Rest mechanisch |
+| 4 | forcedeth (netdev) | **GESENDET 15.08.2026 21:54**, 10 Empfänger, 0 abgelehnt |
 | 5 | nv04-FIFO v3, **Viererserie** | **GESENDET 13.08.2026 01:13**, 5x SMTP 250 |
 | 6 | Tesla-Recovery (ex 5/5) | zurückgestellt für v4, zwei Codefehler, siehe unten |
-| 7 | Teardown (3 Patches) | fertig, **nicht gesendet** |
+| 7 | Teardown (3 Patches) | **GESENDET 15.08.2026 21:54**, 7 Empfänger, 0 abgelehnt |
 | 8 | drm_panic-Bericht | **GESENDET 15.08.2026 18:07**, 12 Empfänger, 0 abgelehnt |
 
 Alle vier gesendeten Threads werden vom Morgen-Briefing gepollt.
