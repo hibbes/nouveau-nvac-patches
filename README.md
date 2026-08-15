@@ -71,6 +71,13 @@ hardware, and a successful soak period before submission.
 | 0019 | drm/nouveau: EVO supervisor-handshake rescue + Tesla channel-kill dead-letter fix | **0020a part is an upstream candidate** (see below); rescue half is diagnose-only pending phase confirmation |
 | 0020 | drm/nouveau/fifo: Tier-0 escalation ladder for Tesla CACHE_ERROR/DMA_PUSHER | local only; rework of 0006, first faults survive instead of killing the channel |
 | 0021 | drm/nouveau/disp: compact supervisor snapshot around core updates | local only; diagnostics, no behaviour change |
+| 0022 | drm/nouveau/fifo: debug fault injector for the Tesla recovery path | local only, **not for upstream**; drives `nv04_fifo_recover()` via two write-only module params to exercise the ladder deterministically |
+| 0023 | drm/nouveau: subscribe to the channel-kill event after the fence context | local counterpart of v3 2/5 (nv04-FIFO v3 series sent ML 2026-08-13) |
+| 0024 | drm/nouveau/fifo: streak cleanup only after nvkm_chid_put | local counterpart of the v3 5/5 correction (sent ML 2026-08-13) |
+
+The **Status** column above is a snapshot. For the authoritative, dated submission
+state of each track, including the nv04-FIFO v3 four-patch series sent 2026-08-13, see
+[`SUBMISSION-STATUS.md`](SUBMISSION-STATUS.md).
 
 ### 0001 — pci: use nv46 MSI rearm for G94 (NVAC/MCP79)
 
@@ -312,6 +319,24 @@ before and after every core update.  Together they produced the observation that
 healthy soft-DPMS wake performs no supervisor sequence at all, while the wedging wake
 requests one and then stalls: the wedge needs both a supervisor-requesting commit and
 a swallowed interrupt.
+
+### 0022 — fifo: debug fault injector
+
+Local debug patch, not for upstream.  It drives `nv04_fifo_recover()` directly through
+two write-only module parameters, so the Tier-0 ladder, the Tier-1 kill and everything
+downstream of it (the channel-killed event, fence signalling, userspace fallout) can be
+exercised deterministically instead of waiting for a real `CACHE_ERROR` to occur.
+
+### 0023 / 0024 — local counterparts of the submitted nv04-FIFO v3 series
+
+These mirror patches 2/5 and 5/5 of the nv04-FIFO v3 series sent to the list on
+2026-08-13, adapted to the stack running here.  0023 subscribes to the channel-kill
+event only after the fence context exists; on this host that subscription is
+additionally gated by the local `chan_kill_event` module parameter 0019 adds, which the
+upstream version omits.  0024 moves the `chfault[].owner` cleanup in `nvkm_chan_del()`
+to run only after `nvkm_chid_put()`: until the slot is cleared the dying channel is
+still discoverable, so `nv04_fifo_recover()` could re-set `cf->owner` and a later
+allocation on the same slab would inherit a stale owner.
 
 ## Building locally
 
