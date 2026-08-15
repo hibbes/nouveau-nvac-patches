@@ -14,6 +14,8 @@ Anubis blockiert ist).
 | 4 | forcedeth (netdev) | fertig, **nicht gesendet**; `Fixes:` seit 13.08. ermittelt, Rest mechanisch |
 | 5 | nv04-FIFO v3, **Viererserie** | **GESENDET 13.08.2026 01:13**, 5x SMTP 250 |
 | 6 | Tesla-Recovery (ex 5/5) | zurückgestellt für v4, zwei Codefehler, siehe unten |
+| 7 | Teardown (3 Patches) | fertig, **nicht gesendet** |
+| 8 | drm_panic-Bericht | **GESENDET 15.08.2026 18:07**, 12 Empfänger, 0 abgelehnt |
 
 Alle vier gesendeten Threads werden vom Morgen-Briefing gepollt.
 
@@ -244,9 +246,13 @@ Einreichung wäre zu klären, ob `soft_dpms` überhaupt noch etwas beiträgt.
 
 ## Weitere offene Punkte aus den Covers
 
-- **ERLEDIGT 15.08.2026:** der versprochene Bericht zum **drm_panic-ioremap**
-  ist geschrieben und liegt in [`drm-panic-report/`](drm-panic-report/), noch
-  nicht gesendet. **Korrektur einer Datumsangabe, die hier falsch stand:** der
+- **GESENDET 15.08.2026 18:07.** Der versprochene Bericht zum
+  **drm_panic-ioremap** ist raus, Message-ID
+  `178681005908.3524476.7115000150741026287@gmail.com`, 12 Empfänger, keine
+  Ablehnung. Quellen und Versandprotokoll in
+  [`drm-panic-report/`](drm-panic-report/). **Zum Beobachten:** gehört ins
+  Morgen-Briefing, Baseline 1 Mail. Antworten sind hier eher zu erwarten als
+  bei den Patchserien, weil die drm_panic-Maintainer direkt im To stehen. **Korrektur einer Datumsangabe, die hier falsch stand:** der
   02.06. ist das Datum des *Absturzes*. Das *Versprechen* steht im **v2**-Cover
   (`20260806085228.1848994-1-mczernohous@gmail.com`, 06.08.2026), nicht im
   gesendeten v3-Cover. Es war also neun Tage alt, nicht zweieinhalb Monate.

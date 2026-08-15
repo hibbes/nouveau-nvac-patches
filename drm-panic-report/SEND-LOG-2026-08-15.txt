@@ -1,0 +1,47 @@
+# Versandprotokoll drm_panic-Bericht
+
+Gesendet: 2026-08-15 18:07 CEST
+Message-ID: <178681005908.3524476.7115000150741026287@gmail.com>
+Betreff: [BUG] nouveau: drm_panic get_scanout_buffer() maps the BO from
+         panic context (ioremap + sleeping locks)
+
+Weg: python smtplib ueber smtp.gmail.com:587, STARTTLS, Login mit dem
+App-Passwort aus ~/.smtp-gmail.env. NICHT git send-email, weil das
+ein Prosa-Bericht ist und kein Patch.
+
+Absender: Marek Czernohous <mczernohous@gmail.com>
+(dieselbe Adresse wie bei allen Kernel-Sendungen seit Juni 2026; die
+Message-ID laeuft deshalb ueber gmail.com, siehe die Message-ID-Falle
+im Statusbericht)
+
+To:
+  Jocelyn Falempe <jfalempe@redhat.com>
+  Javier Martinez Canillas <javierm@redhat.com>
+  Lyude Paul <lyude@redhat.com>
+  Danilo Krummrich <dakr@kernel.org>
+Cc:
+  nouveau@lists.freedesktop.org
+  dri-devel@lists.freedesktop.org
+  Maarten Lankhorst <maarten.lankhorst@linux.intel.com>
+  Maxime Ripard <mripard@kernel.org>
+  Thomas Zimmermann <tzimmermann@suse.de>
+  David Airlie <airlied@gmail.com>
+  Simona Vetter <simona@ffwll.ch>
+  linux-kernel@vger.kernel.org
+
+Ergebnis: 12 Empfaenger, 0 abgelehnt. Kein Bounce.
+Umfang: 436 Zeilen, 19854 Bytes.
+
+## Pruefungen vor dem Versand
+
+- Betreffzeile korrekt nach RFC 5322 gefaltet, Leerzeile danach vorhanden
+  (genau der Fehler, der am 14.08. zweimal in Cover-Letters steckte und
+  den Eroeffnungsabsatz verschluckt haette).
+- Keine Platzhalter. Der einzige TODO-Treffer steht in einem zitierten
+  Kernel-Quelltextkommentar.
+- Reines ASCII, keine Geviertstriche.
+- Nur eine Zeile ueber 72 Zeichen, und das ist die lore-URL.
+- Jeder der 14 zitierten Stack-Frames einzeln gegen das netconsole-Log
+  geprueft, alle vorhanden.
+- Duplikatsuche ueber den mail-archive-Spiegel (lore ist von hier
+  gesperrt): kein fremder Bericht.
