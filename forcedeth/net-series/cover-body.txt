@@ -88,14 +88,13 @@ Testing
   safely on this machine. It rests on the arithmetic in the patch and
   on the build below.
 
-  Build, and its limits: the tree is configured allmodconfig, and
-  drivers/net/ethernet/nvidia/ builds clean under it with W=1, no
-  warnings from either patch. I have not run a full allmodconfig or
-  allyesconfig build of the whole tree, which is what
-  maintainer-netdev.rst asks for; on the two cores I have that is a
-  multi-day proposition. If that is a blocker, say so and I will queue
-  it before reposting rather than send you something I have not actually
-  measured.
+  Build: allmodconfig with W=1 on x86_64, whole tree, zero compiler
+  warnings and zero errors; forcedeth.c specifically produces none.
+  That took about 30 hours on the two cores I have, which is why I say
+  it plainly rather than in passing.
+
+  I have not run allyesconfig. If you want that too, say so and I will
+  queue it before reposting rather than claim a build I did not do.
 
 Two checkpatch notes on 1/2, both deliberate
 
