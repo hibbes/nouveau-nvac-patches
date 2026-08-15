@@ -85,3 +85,39 @@ Satz"). Der Empfehlung wurde gefolgt, ohne die naheliegende Anschluss-
 frage zu stellen: wenn die Begruendung nicht traegt, traegt dann der
 Patch? Ein Befund ueber eine Begruendung ist immer auch ein Verdacht
 gegen die Sache selbst.
+
+## NACHTRAG 2, 15.08.2026 22:55: Antwort auf die Bot-Befunde zu 2/3
+
+Der Bot hatte um 20:11 drei Befunde zu 2/3 gemeldet, alle ausdruecklich als
+"pre-existing" markiert. Antwort gesendet:
+178682657122.3795552.6920623796751043528@gmail.com, 8 Empfaenger, 0 abgelehnt.
+Wortlaut in ANTWORT-2von3-2026-08-15.txt.
+
+Einordnung der drei Befunde nach eigener Pruefung:
+
+1. NULL-Zugriff in nouveau_dp_irq(): **das ist unser eigenes 3/3**, im selben
+   Umschlag mitgeschickt. Der Bot hat die Verbindung nicht gezogen. Steht
+   deshalb zuerst in der Antwort, damit niemand ihn fuer offen haelt.
+
+2. LVDS-Fehlerpfad in nouveau_connector_create(): wirklich vorbestehend und
+   unabhaengig. drm_connector_init() haengt den Connector schon in
+   dev->mode_config.connector_list, bevor der Fehlerpfad ihn ohne
+   drm_connector_cleanup() kfree()t. Braucht einen eigenen Patch, der Pfad ist
+   auf dieser Hardware nicht erreichbar.
+
+3. hpd_work wird nach seiner Leerung neu eingereiht: **nicht von 2/3
+   verursacht**. Ohne den Patch laeuft dieselbe eingereihte irq_work genauso
+   zu Ende und ruft genauso nouveau_connector_hpd(). Der Patch fuegt nur ein
+   Warten hinzu und verkleinert die Aussetzung eher.
+
+**Aber ein Punkt trifft uns:** das Cover behauptete "So there is no fourth
+patch here". Beim Nachsehen fanden sich ZWEI weitere
+cancel_work_sync(&drm->hpd_work), die beim Schreiben unbekannt waren
+(dispnv50/disp.c:2686 und dispnv04/disp.c:72, beide unter derselben Bedingung
+wie nouveau_display.c:600). Alle drei laufen vor dem Zerstoeren der
+Connectoren, der Einwand bleibt also bestehen. Der Satz war zu bestimmt fuer
+das, was tatsaechlich geprueft war, und die Antwort raeumt das ein.
+
+**Muster des Abends, zweimal derselbe Fehlertyp:** eine Aussage staerker
+formuliert, als die eigene Pruefung sie trug. Bei 1/3 kostete das den
+Patch, bei 2/3 nur eine Korrektur.

@@ -1,0 +1,48 @@
+Three findings, three different answers, so let me take them in turn.
+
+The NULL dereference in nouveau_dp_irq() is 3/3 of this series.  Same
+thread, sent alongside this patch.  Nothing further needed there, and
+the two are related on purpose: 2/3 drains the work, 3/3 fixes the
+handler that work runs.
+
+The LVDS error path in nouveau_connector_create() is real as far as I
+can see, and independent of anything here.  drm_connector_init() has
+already put the connector on dev->mode_config.connector_list when the
+nouveau_bios_parse_lvds_table() failure path kfree()s it without
+drm_connector_cleanup().  I am not touching it in this series; it wants
+its own patch and I have no way to reach that path on my hardware.
+
+The hpd_work point is the interesting one, and I owe a correction on it.
+
+2/3 does not create that path.  Without this patch the same already
+queued irq_work still runs to completion and still ends in
+nouveau_connector_hpd(), which schedules drm->hpd_work under
+drm->hpd_lock; the only thing this patch adds is that the destroy now
+waits for it.  If anything that narrows the exposure, because without
+the wait the work can run later still, potentially after the connector
+is gone.  That is the bug 2/3 is about.
+
+But the wider question the bot is asking is fair, and my cover letter
+answered it too confidently.  It says "there is no fourth patch here"
+on the strength of drm->hpd_work being drained in
+nouveau_display_fini().  Having looked again after the bot's mail: that
+drain runs at nouveau_display.c:600 under "if (!runtime &&
+!drm->headless)", and disp->fini() drains it a second time under the
+same condition (dispnv50/disp.c:2686, dispnv04/disp.c:72, which I had
+not spotted when I wrote the cover).  Both of those are before
+drm_mode_config_cleanup() reaches nouveau_connector_destroy().  So a
+late irq_work really can re-arm hpd_work after every drain, and nothing
+drains it again.  Whether that is reachable in practice I do not know:
+nvif_event_block() on conn->irq has already run by then, so it needs
+work that was queued before the block and has not run yet.
+
+I cannot rule it out, so I should not have written that sentence as a
+finding.  It should have said that I looked and did not find a fourth
+patch, not that there is none.  If the maintainers want, the shape of a
+fix is probably a drain of hpd_work after the connectors are gone, or
+making nouveau_connector_hpd() a no-op once teardown has started, but
+that is a separate change from this series and I would rather someone
+who knows the hotplug path weighs in before I write it.
+
+For the avoidance of doubt: 2/3 and 3/3 still stand as posted.  1/3 is
+withdrawn, for an unrelated reason, in the sibling thread.
