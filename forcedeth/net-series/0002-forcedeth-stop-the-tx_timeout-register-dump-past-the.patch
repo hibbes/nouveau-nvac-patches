@@ -1,4 +1,4 @@
-From c9eebd11b46e23e09b61e512d2f40378e3cf3404 Mon Sep 17 00:00:00 2001
+From 16a2b0a048b40c9a9a4bead129406f5eb0910f8a Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
 Date: Thu, 13 Aug 2026 15:10:18 +0200
 Subject: [PATCH net 2/2] forcedeth: stop the tx_timeout register dump past the
@@ -28,17 +28,16 @@ it is not a consequence of the sizes being odd: with i <= register_size
 the offending row is reached whatever the size, and a size that were a
 multiple of 32 would overrun by a full row rather than by a remainder.
 
-To be precise about the severity: ioremap() rounds the length up to page
-granularity and the BAR is at least page aligned, so on any architecture
-with PAGE_SIZE >= 4K these reads still land inside the mapped page. They
-also land inside the BAR in practice, since the smallest PCI BAR is a
-page and the driver only accepts a region with pci_resource_len() >=
-register_size, but note that the length check alone would not guarantee
-it: a BAR of exactly 0x604 bytes would pass it and still not contain
-0x61f. They
-leave the window the driver requested, not the mapping the CPU has. That
-is still a driver reading registers it did not ask for, and it is trivial
-to avoid, but nobody should expect a fault from it.
+To be precise about the severity: the reads stay inside the BAR. Memory
+BAR sizes are powers of two, the driver only accepts a region with
+pci_resource_len() >= register_size (forcedeth.c:5757-5762), and the
+next power of two at or above each register_size already covers the
+offending row: 0x400 for 0x270 and 0x2d4, 0x800 for 0x604. ioremap()
+also rounds the mapped length up to page granularity, so the reads land
+inside the mapping the CPU has as well. What they leave is the window
+the driver asked for, not the BAR and not the mapping. That is still a
+driver reading registers it did not ask for, and it is trivial to
+avoid, but nobody should expect a fault from it.
 
 Changing <= to < is not enough: register_size is a length and every size
 above is larger than its last row start, so i still reaches the offending

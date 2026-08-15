@@ -1,6 +1,6 @@
-From c9eebd11b46e23e09b61e512d2f40378e3cf3404 Mon Sep 17 00:00:00 2001
+From 16a2b0a048b40c9a9a4bead129406f5eb0910f8a Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
-Date: Sat, 15 Aug 2026 20:54:34 +0200
+Date: Sat, 15 Aug 2026 21:27:48 +0200
 Subject: [PATCH net 0/2] forcedeth: two register-window bounds fixes
 
 Two bounds fixes in forcedeth, both in the same shape: a loop that walks
@@ -104,8 +104,9 @@ Testing
 Two checkpatch notes on 1/2, both deliberate
 
   "Prefer a maximum 75 chars per line" fires on a line that is quoted
-  UBSAN output. I left the quote intact rather than rewrap diagnostic
-  text to satisfy a heuristic.
+  UBSAN output. The splat is trimmed, and 1/2 says what was cut, but I
+  did not rewrap the lines that remain: reflowing diagnostic output to
+  satisfy a heuristic makes it harder to match against a real log.
 
   Two "spaces preferred around that '/'" CHECKs fire on
   register_size/sizeof(u32). That spacing is what the file already uses,

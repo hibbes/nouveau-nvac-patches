@@ -99,8 +99,9 @@ Testing
 Two checkpatch notes on 1/2, both deliberate
 
   "Prefer a maximum 75 chars per line" fires on a line that is quoted
-  UBSAN output. I left the quote intact rather than rewrap diagnostic
-  text to satisfy a heuristic.
+  UBSAN output. The splat is trimmed, and 1/2 says what was cut, but I
+  did not rewrap the lines that remain: reflowing diagnostic output to
+  satisfy a heuristic makes it harder to match against a real log.
 
   Two "spaces preferred around that '/'" CHECKs fire on
   register_size/sizeof(u32). That spacing is what the file already uses,
