@@ -103,11 +103,10 @@ Changes in v2:
    https://lore.kernel.org/all/20260815200914.8A1131F000E9@smtp.kernel.org/
  - Change cancel_work_sync() to disable_work_sync() instead, which leaves
    every ordering alone.
- - Describe the damage as the plain use-after-free it is.  v1 also had
-   the re-armed work reaching nvif_event_block() on a destroyed event; on
-   a live context that cannot happen, since the kill empties fctx->pending
-   first and nvif_event_block() is only reached when something was
-   signalled off that list.
+ - Pin the damage down.  Both versions call it a use-after-free; this one
+   adds that &fctx->uevent_work is embedded in the freed allocation, and
+   that the re-armed work has nothing left to do on a live context, so
+   the access to freed memory is the whole of it.
  - Correct the backport note.  v1 claimed no longterm tree sat in the gap
    between the bug and disable_work_sync(); 6.6.y does.  The stable tag is
    annotated accordingly.
@@ -115,6 +114,7 @@ Changes in v2:
 This replaces 1/3 of
 https://lore.kernel.org/all/178682366002.3748010.12779628082366287968@gmail.com/
 2/3 and 3/3 of that series are unaffected and still stand.
+
  drivers/gpu/drm/nouveau/nouveau_fence.c | 2 +-
  1 file changed, 1 insertion(+), 1 deletion(-)
 
