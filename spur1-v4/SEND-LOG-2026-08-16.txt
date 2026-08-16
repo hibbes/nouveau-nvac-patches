@@ -1,0 +1,71 @@
+# Spur 1 v4 GESENDET 16.08.2026
+
+3 Mails, 7 Empfaenger, 0 abgelehnt, kein Bounce.
+
+Message-IDs (flaches Threading, 1/2 und 2/2 antworten auf das Cover):
+
+  Cover 178688574400.522643.6695278742335367229@gmail.com
+  1/2   178688574401.522643.12812428444459119913@gmail.com
+  2/2   178688574402.522643.5471719764843371376@gmail.com
+
+Betreff: [PATCH v4 0/2] drm/nouveau: NVAC (MCP79) stability: MSI rearm and
+         a NULL crtc guard
+Basis:   c21bb4193868
+
+To: nouveau@lists.freedesktop.org, dri-devel@lists.freedesktop.org
+Cc: linux-kernel@vger.kernel.org, Danilo Krummrich <dakr@kernel.org>,
+    Lyude Paul <lyude@redhat.com>, David Airlie <airlied@gmail.com>,
+    Simona Vetter <simona@ffwll.ch>
+
+**Neuer Faden**, bewusst nicht in den v3-Faden gehaengt: der ist zwei Monate
+alt und die Serie hat sich geaendert. Das Cover verweist per lore-URL auf v3.
+
+## Warum ueberhaupt ein v4
+
+Die v3 vom 11.06.2026 (20260611124535.527275-1-mczernohous@gmail.com) blieb
+unbeantwortet. Ein blosser Ping waere wertlos gewesen, weil 0002 nicht mehr
+anwendet, der Faden also auf eine untestbare Serie gezeigt haette.
+
+Inhaltlich hat sich **nichts** geaendert. 0001 ist byte-identisch zur v3,
+0002 nur von Hand rebased wegen
+commit 5164f7e7ff8e ("drm: Rename struct drm_atomic_state to
+drm_atomic_commit"). Der Parameter heisst jetzt drm_atomic_commit *state.
+
+## Vor dem Cover gegen c21bb4193868 geprueft: beide Fehler leben
+
+  :1565  nv50_sor_atomic_disable(..., struct drm_atomic_commit *state)
+  :1568  struct nv50_head *head = nv50_head(nv_encoder->crtc);   <- ungeschuetzt
+  :1570  nv_connector = nv50_outp_get_old_connector(state, nv_encoder);
+  :1572  struct nouveau_backlight *backlight = nv_connector->backlight;  <- ungeprueft
+
+In der ganzen Funktion gibt es keinen Guard, nv_encoder->crtc wird erst am
+Ende auf NULL gesetzt. Die Titel der drei im Cover referenzierten Commits
+(5112abc6a433, f575f2bdb6c3, 5164f7e7ff8e) einzeln gegen den Baum verifiziert.
+
+## Pruefungen
+
+- checkpatch --strict: Cover 0/0, 0002 0/0.
+  0001 drei Warnungen, alle aus der v3 bekannt und unkritisch: zwei
+  Prototypen ohne Parameternamen (entspricht dem Stil der Nachbarzeilen
+  derselben Datei), plus die MAINTAINERS-Frage, die F: drivers/gpu/drm/nouveau/
+  bereits abdeckt.
+- Beide Patches wenden sauber auf die Basis (isoliert geprueft).
+- 0002 mit CONFIG_DRM_NOUVEAU_BACKLIGHT=y UND =n uebersetzt.
+- Tested-by: Fab Stz in beiden Patches erhalten. Das Cover sagt ausdruecklich,
+  dass sich die Tags auf dieselben Diffs beziehen **bis auf den mechanischen
+  Rebase von 0002**, damit die Uebernahme nicht stillschweigend geschieht.
+
+## Eine Falle beim Erzeugen
+
+`git format-patch -v4 --subject-prefix='PATCH v4'` ergibt `[PATCH v4 v4 0/2]`.
+Nur eines von beiden setzen.
+
+Zweite Falle, checkpatch GIT_COMMIT_ID: beim Verbinden mehrzeiliger
+Commit-Verweise haengt checkpatch **nur eine** Folgezeile an. Ein Titel, der
+sich ueber zwei Folgezeilen zieht, wird als nackter SHA gemeldet. Umbrechen,
+sodass `commit <sha> ("Titel")` in hoechstens zwei Zeilen passt.
+
+## Zu beobachten
+
+Zwei Sichten noetig: **nouveau** (dort liegen Fab Stz' Testberichte) und
+**dri-devel** (dort und nur dort antwortet der sashiko-bot).
