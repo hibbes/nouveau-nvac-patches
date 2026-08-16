@@ -121,3 +121,60 @@ das, was tatsaechlich geprueft war, und die Antwort raeumt das ein.
 **Muster des Abends, zweimal derselbe Fehlertyp:** eine Aussage staerker
 formuliert, als die eigene Pruefung sie trug. Bei 1/3 kostete das den
 Patch, bei 2/3 nur eine Korrektur.
+
+# ============================================================
+# NACHTRAG 16.08.2026: v2 VON 1/3 GESENDET
+# ============================================================
+
+Gesendet 16.08.2026, Message-ID
+  178688513268.513871.3468844663561639695@gmail.com
+7 Empfaenger, 0 abgelehnt, kein Bounce.
+
+Betreff: [PATCH v2] drm/nouveau: disable the fence uevent work instead of
+         just cancelling it
+Threading: In-Reply-To auf die urspruengliche 1/3
+  (178682366002.3748010.12779628082366287968@gmail.com),
+  References Cover + 1/3. Haengt also im bestehenden Faden.
+Empfaenger: dieselben sieben wie bei der v1. Skeggs weiterhin draussen.
+
+Der Diff ist ein Wort: cancel_work_sync -> disable_work_sync.
+Der Commit-Text wurde nach drei Pruefrunden praktisch neu geschrieben.
+
+## Was die dritte Pruefung noch gefunden hat (alle vor Uebernahme selbst
+## gegen die Quelle geprueft, zwei Pruefbefunde dabei widerlegt)
+
+1. Der behauptete Schadensweg war unerreichbar. nouveau_fence_update()
+   erreicht nvif_event_block() nur bei gesetztem drop (:138-139), und drop
+   entsteht nur aus der Schleife ueber fctx->pending (:130-136), die der
+   kill vorher leert. Der echte Schaden ist der blanke Use-after-free:
+   work_struct uevent_work liegt eingebettet in fctx (nouveau_fence.h:53),
+   nouveau_fence_context_put() gibt per kfree() frei (:114).
+
+2. "No longterm tree sits in that gap" war falsch. Der Fixes-Commit ging
+   als CVE-2024-26719 nach 6.6.18 und 6.7.6. linux-6.6.y traegt den Fehler
+   und hat kein disable_work_sync() (erst v6.10-rc1). Ein blankes
+   Cc: stable haette die Automatik dort in einen Bau-Fehler laufen lassen.
+   Jetzt: Cc: <stable@vger.kernel.org> # 6.10.x, Form nach
+   stable-kernel-rules.rst:111-119.
+
+3. Der Verweis zeigte auf die Bot-Kritik an der zurueckgezogenen v1 statt
+   auf den Fehlerbericht. Jetzt Closes: auf den lore-Thread der
+   Viererserie, dieselbe URL wie im Cover der Serie.
+
+## Zwei Stellen, an denen die Pruefer danebenlagen
+
+- Zwei Pruefer schrieben, die Alternative (zweiter Drain hinter dem dtor)
+  reisse das TOCTOU-Fenster wieder auf. Falsch, aus demselben Grund wie
+  Punkt 1. Die Alternative ist sicher und waere nach 6.6.y portierbar.
+  Sie steht jetzt offen im Commit-Text, samt der echten Gruende fuer
+  disable_work_sync (ein Synchronisationspunkt statt zwei, in drm
+  etabliert: xe, panthor, drm_pagemap).
+- Das eigene Aenderungsprotokoll behauptete, die gesendete v1 habe den
+  nvif_event_block-Fehler enthalten. Die v1 sagte bei Zeile 28 korrekt
+  "runs against freed memory". Vor dem Versand korrigiert.
+
+checkpatch --strict 0/0/0. Diff-Hash identisch zur gebauten Fassung
+(908fc2e9bdca...), daher kein Neubau. Basis c21bb4193868.
+
+**Zu beobachten:** ob der sashiko-bot erneut antwortet (er tut das nur auf
+dri-devel, siehe Briefing-Bloecke).
