@@ -117,3 +117,65 @@ ausueben laesst. Antwort auf der Liste entworfen, Versand nach Freigabe.
 
 /all/ fuehrt jede Mail einmal PRO LISTE. Gemessen: /nouveau/ 3, /dri-devel/ 4,
 /all/ 7. Die /all/-Zahl ist die Summe, nicht die Zahl der Mails.
+
+# ============================================================
+# NACHTRAG 16.08. 17:29: ANTWORT AUF DEN BOT-BEFUND GESENDET
+# ============================================================
+
+Message-ID 178689894484.725775.7881685692020502024@gmail.com
+7 Empfaenger, 0 abgelehnt. In-Reply-To auf die Bot-Mail
+(20260816131755.1B99B1F000E9@smtp.kernel.org), References zusaetzlich auf
+Cover und 2/2. Das Reply-To der Bot-Mail (sashiko-reviews@lists.linux.dev)
+wurde bewusst ignoriert, sonst landet die Antwort nicht im Serienfaden.
+Wortlaut: ANTWORT-msto-2026-08-16.txt
+
+## Der erste Entwurf war falsch und wurde durch eine Pruefung gestoppt
+
+Freigegeben war er schon. 31 Agenten, 19 bestaetigte Beanstandungen, zwei
+davon toedlich. Beide selbst am Quelltext nachgeprueft:
+
+1. **Der behauptete Zusatzbefund existiert nicht.** Der Entwurf sagte,
+   nv50_msto_cleanup() sei ebenfalls ungeschuetzt und der Bot habe die
+   Stelle uebersehen. Der Aufrufer prueft aber:
+
+       :1317  struct nv50_mstc *mstc = msto->mstc;
+       :1318  if (mstc && mstc->mstm == mstm)
+       :1319      nv50_msto_cleanup(...)
+
+   Ebenso :1347 und :1359, und nv50_real_outp() prueft bei :889 selbst.
+   Die Funktion war isoliert gelesen worden, ohne die Aufrufer.
+
+2. **msto->head war kein Kandidat.** Einmal gesetzt bei :1131, nie
+   geleert, die Struktur sagt es bei :872 woertlich: "head is statically
+   assigned on msto creation".
+
+3. **Die Erreichbarkeit ist nicht bloss unbelegt, sondern verriegelt.**
+   nouveau faehrt das Disable nicht ueber die Atomic-Helfer, sondern ueber
+   die eigene outp-Schleife (:2229-2240). outp->clr.ctrl wird nur bei
+   :2530 gesetzt, hinter :2517 (CRTC im alten Zustand) und :2522 (CRTC war
+   aktiv). Aktiv wurde sie nur ueber einen Commit mit .atomic_enable
+   (:2272-2274), und genau dort wird msto->mstc zugewiesen.
+
+## Was uebrig blieb, und im gesendeten Text steht
+
+Ein Pfad liess sich nicht ausschliessen:
+
+    :1049  if (WARN_ON(!mstc))
+    :1050      return;            <- vor der Zuweisung
+    :1070  msto->mstc = mstc;
+    :2273  help->atomic_enable(encoder, state);
+    :2274  outp->enabled = true;  <- wird trotzdem gesetzt
+
+Enable steigt frueh aus, ohne mstc zu setzen, commit_tail markiert den
+Ausgang aber als enabled. Hinter einem WARN_ON, also Folgefehler, kein
+frischer Fehler. Der Text sagt ausdruecklich, was NICHT belegt ist, und
+nennt die geschuetzten Stellen als Entwarnung statt als Befund.
+
+## Lehre
+
+Das war heute das vierte Mal dasselbe Muster: eine Wirkungskette
+behauptet, die die eigene Quelltextlesung nicht traegt. Die drei vorigen
+Male fielen bei teardown 1/3 an (Rueckzug), beim ersten v2-Anlauf und beim
+Schadensabsatz der v2. Neu und lehrreich hier: der Fehler entstand durch
+das Lesen einer Funktion OHNE ihre Aufrufer. Bei jeder Aussage "X ist
+ungeschuetzt" gehoert die Aufrufersuche dazu, nicht nur die Funktion.

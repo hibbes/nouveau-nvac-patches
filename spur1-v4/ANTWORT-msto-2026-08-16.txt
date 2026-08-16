@@ -1,0 +1,58 @@
+> This isn't a bug introduced by this patch, but while fixing the
+> disable-without-enable issue here, does a similar vulnerability
+> exist in nv50_msto_atomic_disable() in the same file?
+[...]
+> If this is called during session teardown without a matching
+> .atomic_enable, couldn't msto->mstc be NULL, leading to a NULL
+> pointer dereference when accessing mstc->mstm?
+
+The shape is the same.  nv50_msto_atomic_disable() takes msto->mstc
+without checking it (dispnv50/disp.c:1079-1080):
+
+	struct nv50_mstc *mstc = msto->mstc;
+	struct nv50_mstm *mstm = mstc->mstm;
+
+and the pointer can hold NULL: it is assigned only in
+nv50_msto_atomic_enable() (:1070) and set back to NULL in
+nv50_msto_cleanup() (:918).
+
+What I could not establish is that the callback is reached in that
+state.  nv50 does not drive the encoder disable from the atomic
+helpers, it drives it from its own outp list in
+nv50_disp_atomic_commit_tail() (:2229 to :2240), and outp->clr.ctrl
+is only set in nv50_disp_outp_atomic_check_clr() (:2530), behind two
+conditions: the connector sat on a CRTC in the old state (:2517), and
+that CRTC was active in the old state (:2522).  A CRTC that was
+active came up through a commit that ran .atomic_enable (:2272 to
+:2274), which is where msto->mstc is assigned.  I did not find a way
+around that, so I cannot claim that a disable with no matching enable
+gets there.
+
+The one path I could not rule out is the early return in
+nv50_msto_atomic_enable():
+
+	if (WARN_ON(!mstc))
+		return;
+
+at :1049.  It returns before the assignment at :1070, while
+commit_tail still sets outp->enabled = true at :2274.  That sits
+behind a WARN_ON, so it is a second-order path rather than a fresh
+bug.
+
+For completeness, the other two places that read msto->mstc without
+a check, nv50_msto_cleanup() (:902 and :906 to :908) and
+nv50_msto_prepare() (:934), are covered by their callers, which test
+"mstc && mstc->mstm == mstm" at :1318, :1347 and :1359.
+nv50_real_outp() checks for itself at :889.  The disable callback is
+the only reader left without a check.
+
+I am not adding a patch for it to this series, for the same reason
+2/2 is scoped the way it is: 2/2 fixes something I hit on real
+hardware and can reproduce.  This is MST, I have no MST setup here,
+and a guard written against a path I cannot exercise is a guess.  If
+the maintainers want it anyway I will send it as a separate patch,
+but I would rather hear from someone who can run MST whether that
+callback is reachable with msto->mstc NULL at all.
+
+v4 stands as posted, no respin planned for this.  The question is
+orthogonal to both patches.
