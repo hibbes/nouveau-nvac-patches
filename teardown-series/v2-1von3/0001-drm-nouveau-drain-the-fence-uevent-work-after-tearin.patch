@@ -1,0 +1,103 @@
+From 9be2d2803cd667a813b86fd43fe112b13f3dc9d5 Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
+Date: Sun, 16 Aug 2026 09:49:53 +0200
+Subject: [PATCH v2] drm/nouveau: drain the fence uevent work after tearing the
+ event down
+
+nouveau_fence_context_del() drains the uevent work before the event that
+feeds it is gone:
+
+	cancel_work_sync(&fctx->uevent_work);
+	nouveau_fence_context_kill(fctx, 0);
+	nvif_event_dtor(&fctx->event);
+
+Between the drain and the dtor the event is still armed, and
+nouveau_fence_wait_uevent_handler() queues the work unconditionally:
+
+	schedule_work(&fctx->uevent_work);
+	return NVIF_EVENT_KEEP;
+
+A non-stall interrupt in that window re-arms the work that was just
+drained.  The callers free the context immediately afterwards, for
+example nv84_fence_context_del():
+
+	nouveau_fence_context_del(&fctx->base);
+	chan->fence = NULL;
+	nouveau_fence_context_free(&fctx->base);
+
+nouveau_fence_uevent_work() then runs against freed memory, taking
+fctx->lock and walking fctx->pending.
+
+Only chips from G84 on can reach this: nouveau_fence_context_new()
+returns before nvif_event_ctor() when priv->uevent is clear, and
+nv84_fence_create() is the only place that sets it.
+nv84_fence_context_del() is the context_del for all of those, because
+nvc0_fence_create() and gv100_fence_create() build on
+nv84_fence_create() and override only context_new.
+
+Move the drain to the end instead, leaving the kill and the dtor in
+their original order:
+
+	nouveau_fence_context_kill(fctx, 0);
+	nvif_event_dtor(&fctx->event);
+	cancel_work_sync(&fctx->uevent_work);
+
+Each step then closes the door behind it.
+
+The kill signals every fence on fctx->pending under fctx->lock and
+removes it from the list.  After that dma_fence_add_callback() returns
+-ENOENT for those fences before it reaches __dma_fence_enable_signaling()
+(drivers/dma-buf/dma-fence.c:707-710), so nouveau_fence_enable_signaling()
+and the nvif_event_allow() in it are no longer reachable.  This is what
+makes the following dtor safe, and it is why the kill has to stay in
+front of it: nvif_event_constructed() is a plain read of object->client,
+not a lock, and nouveau_fence_context_del() holds nothing that would
+serialise it against a concurrent enable_signaling().
+
+The dtor then stops the handler for good.  nvkm_event_ntfy() delivers
+under read_lock_irqsave(&event->list_lock) while it calls ntfy->func(),
+and nvkm_event_ntfy_remove() takes write_lock_irq() on the same lock
+before unlinking (drivers/gpu/drm/nouveau/nvkm/core/event.c), so the
+teardown waits out any handler already running and no further one can
+start.
+
+The drain last therefore picks up whatever the handler queued on its way
+out, with nothing left that could re-arm it.  nouveau_fence_uevent_work()
+itself only takes fctx->lock and looks at fctx->pending, which the kill
+has already emptied, so running it once more is harmless.
+
+Found by the Sashiko review bot, which also caught the first attempt at
+this: v1 moved the dtor to the front instead, which put it exactly where
+enable_signaling() is still live and traded the re-arm window for a wider
+NULL-deref window in nvif_object_ioctl().  That version is withdrawn.
+
+Reported-by: sashiko-bot <sashiko-bot@kernel.org>
+Link: https://lore.kernel.org/nouveau/178682366002.3748010.12779628082366287968@gmail.com/
+Fixes: 39126abc5e20 ("nouveau: offload fence uevents work to workqueue")
+Cc: stable@vger.kernel.org
+Assisted-by: Claude:claude-opus-5
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+---
+ drivers/gpu/drm/nouveau/nouveau_fence.c | 2 +-
+ 1 file changed, 1 insertion(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/nouveau/nouveau_fence.c b/drivers/gpu/drm/nouveau/nouveau_fence.c
+index edbe9e08ba0f..f9e77436e4e7 100644
+--- a/drivers/gpu/drm/nouveau/nouveau_fence.c
++++ b/drivers/gpu/drm/nouveau/nouveau_fence.c
+@@ -96,9 +96,9 @@ nouveau_fence_context_kill(struct nouveau_fence_chan *fctx, int error)
+ void
+ nouveau_fence_context_del(struct nouveau_fence_chan *fctx)
+ {
+-	cancel_work_sync(&fctx->uevent_work);
+ 	nouveau_fence_context_kill(fctx, 0);
+ 	nvif_event_dtor(&fctx->event);
++	cancel_work_sync(&fctx->uevent_work);
+ 	fctx->dead = 1;
+ 
+ 	/*
+
+base-commit: c21bb4193868a8de71fc4693fa741e195fdf5d86
+-- 
+2.54.0
+

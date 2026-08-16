@@ -1,0 +1,97 @@
+From 72a21ddc97d985f6c763e7b3a8bc73e430300c30 Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
+Date: Sun, 16 Aug 2026 09:46:35 +0200
+Subject: [PATCH 2/2] drm/nouveau/kms: guard NULL crtc in
+ nv50_sor_atomic_disable()
+
+nv50_sor_atomic_disable() unconditionally computes
+nv50_head(nv_encoder->crtc) and dereferences the result a few lines
+later.  nv_encoder->crtc is nouveau's own shadow pointer, set in
+.atomic_enable and cleared at the end of .atomic_disable.
+Commit f575f2bdb6c3 ("drm/nouveau/kms/nv50-: Remove (nv_encoder->crtc)
+checks in ->disable callbacks") removed the NULL check here,
+reasoning that the atomic helpers never call ->disable without a
+crtc.  On NVAC (MCP79) under Wayland sessions (observed with Weston's
+DRM backend and with labwc/wlroots) we have hit the NULL case in
+practice during session teardown and VT switches: disable runs without
+(or after) its matching enable, and because nv50_head() is
+container_of(), the NULL does not stay NULL but becomes a bogus
+non-NULL pointer, so the subsequent head dereferences fault and the
+kernel oopses.
+
+Restore the guard, as drm_WARN_ON_ONCE() instead of a silent return:
+a NULL crtc here still indicates a state-tracking inconsistency that
+should stay visible.  Return without touching the output; in this path
+either enable never ran (nothing to tear down) or an earlier disable
+already did the teardown, and the encoder release is handled by the
+commit_tail release loop in both cases.  (That loop then rejects the
+release of a never-acquired output with -EINVAL in the nvif layer,
+which is harmless; the vanilla code oopsed before ever reaching it.)
+
+The same inconsistent-state path can also leave the encoder without an
+old connector state, in which case nv50_outp_get_old_connector()
+returns NULL while the backlight teardown dereferenced it
+unconditionally, so the oops would only have moved there.  Hoist the
+guard above all of that and look at the old connector only after
+checking it.
+
+Fixes: f575f2bdb6c3 ("drm/nouveau/kms/nv50-: Remove (nv_encoder->crtc) checks in ->disable callbacks")
+Cc: <stable@vger.kernel.org>
+Tested-by: Fab Stz <fabstz-it@yahoo.fr>
+Assisted-by: Claude:claude-opus-4-7
+Assisted-by: Claude:claude-opus-4-8
+Assisted-by: Claude:claude-opus-5
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+---
+ drivers/gpu/drm/nouveau/dispnv50/disp.c | 30 ++++++++++++++++++++-----
+ 1 file changed, 25 insertions(+), 5 deletions(-)
+
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+index 364227f5456f..f532b0ed8880 100644
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+@@ -1565,16 +1565,36 @@ static void
+ nv50_sor_atomic_disable(struct drm_encoder *encoder, struct drm_atomic_commit *state)
+ {
+ 	struct nouveau_encoder *nv_encoder = nouveau_encoder(encoder);
+-	struct nv50_head *head = nv50_head(nv_encoder->crtc);
++	struct nv50_head *head;
+ #ifdef CONFIG_DRM_NOUVEAU_BACKLIGHT
+-	struct nouveau_connector *nv_connector = nv50_outp_get_old_connector(state, nv_encoder);
++	struct nouveau_connector *nv_connector;
+ 	struct nouveau_drm *drm = nouveau_drm(nv_encoder->base.base.dev);
+-	struct nouveau_backlight *backlight = nv_connector->backlight;
+-	struct drm_dp_aux *aux = &nv_connector->aux;
++	struct nouveau_backlight *backlight;
+ 	int ret;
++#endif
+ 
++	/* nv_encoder->crtc is the driver's shadow pointer, set in
++	 * .atomic_enable (and by the boot-time hardware readback) and
++	 * cleared at the end of this function.  NULL here
++	 * means disable-without-enable or a double disable; bail before
++	 * container_of() turns it into a bogus head pointer (checking the
++	 * result would not work, container_of(NULL) is never NULL).  The
++	 * encoder release is handled by the commit_tail release loop, so
++	 * there is nothing to clean up here.
++	 */
++	if (drm_WARN_ON_ONCE(encoder->dev, !nv_encoder->crtc))
++		return;
++	head = nv50_head(nv_encoder->crtc);
++
++#ifdef CONFIG_DRM_NOUVEAU_BACKLIGHT
++	/* The same inconsistent-state path can leave us without an old
++	 * connector state, so check before touching it.
++	 */
++	nv_connector = nv50_outp_get_old_connector(state, nv_encoder);
++	backlight = nv_connector ? nv_connector->backlight : NULL;
+ 	if (backlight && backlight->uses_dpcd) {
+-		ret = drm_edp_backlight_disable(aux, &backlight->edp_info);
++		ret = drm_edp_backlight_disable(&nv_connector->aux,
++						&backlight->edp_info);
+ 		if (ret < 0)
+ 			NV_ERROR(drm, "Failed to disable backlight on [CONNECTOR:%d:%s]: %d\n",
+ 				 nv_connector->base.base.id, nv_connector->base.name, ret);
+-- 
+2.54.0
+

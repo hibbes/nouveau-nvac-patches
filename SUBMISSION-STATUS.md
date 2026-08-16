@@ -8,7 +8,7 @@ Anubis blockiert ist).
 
 | Spur | Gegenstand | Status |
 |---|---|---|
-| 1 | NVAC-Stabilität (0001, 0002) | **v3 auf der Liste**, seit 11.06. keine Reaktion |
+| 1 | NVAC-Stabilität (0001, 0002) | **v4 rebased 16.08.**, fertig, nicht gesendet |
 | 2 | nv04-FIFO v1 (0004, 0006) | **zurückgezogen** 25.07. |
 | 3 | nv04-FIFO v2 (3 Patches) | **gesendet** 06.08., keine Reaktion |
 | 4 | forcedeth (netdev) | **GESENDET 15.08.2026 21:54**, 10 Empfänger, 0 abgelehnt |
