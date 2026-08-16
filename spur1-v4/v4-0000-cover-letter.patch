@@ -1,0 +1,77 @@
+From 72a21ddc97d985f6c763e7b3a8bc73e430300c30 Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
+Date: Sun, 16 Aug 2026 15:06:08 +0200
+Subject: [PATCH v4 0/2] drm/nouveau: NVAC (MCP79) stability: MSI rearm and a NULL crtc guard
+
+This is v4 of two NVAC (MCP79) stability fixes.  v3 went out on 11 June
+and has had no replies:
+
+  https://lore.kernel.org/all/20260611124535.527275-1-mczernohous@gmail.com/
+
+Nothing in either patch changed.  Same diffs, same reasoning, same
+trailers.  The reason this is a v4 and not a ping is that 2/2 no longer
+applies to mainline, so a ping would have pointed at a series nobody can
+test.
+
+What moved was somebody else's context, not this code.
+Commit 5164f7e7ff8e ("drm: Rename struct drm_atomic_state to
+drm_atomic_commit") changed the callback signature, so
+nv50_sor_atomic_disable() now takes a struct drm_atomic_commit *state.
+2/2 is rebased onto that by hand.  1/2 applies unchanged and is
+byte-identical to v3.
+
+Both bugs are still live in c21bb4193868.  dispnv50/disp.c:1568 still
+does nv50_head(nv_encoder->crtc) with no NULL check, and there is no
+guard anywhere in the function.  Immediately below it, :1570 takes
+nv50_outp_get_old_connector() and :1572 dereferences the result without
+checking it.
+
+1/2 drm/nouveau/pci: use config-space MSI rearm on MCP79/MCP7A (NVAC)
+
+    NVAC re-arms MSI through the MMIO mirror of PCI config space, which
+    is unreliable on this IGP.  A missed re-arm leaves the interrupt
+    line dead, submission times out and the GPU looks hung until
+    reboot.  Give NVAC its own pci func that re-arms through real
+    config space, the way commit 5112abc6a433 ("drm/nouveau/pci/g92:
+    Fix rearm") already did for g92.  Only NVAC is switched, because
+    that is the part this was validated on.
+
+2/2 drm/nouveau/kms: guard NULL crtc in nv50_sor_atomic_disable()
+
+    Restore the NULL check that
+    commit f575f2bdb6c3 ("drm/nouveau/kms/nv50-: Remove
+    (nv_encoder->crtc) checks in ->disable callbacks") removed, as a
+    drm_WARN_ON_ONCE() rather than a silent return, since a NULL crtc
+    here is a state-tracking inconsistency worth seeing.  The guard is
+    hoisted above the backlight teardown so the old connector is only
+    used after it has been checked; without that the oops would just
+    move a few lines down.
+
+Testing.  The MSI change continues to run here on the Mac mini as a
+daily driver, and Fab Stz confirmed it independently on an iMac9,1.
+Both Tested-by tags are carried over unchanged from v3; the
+diffs they were given are the diffs sent here, apart from the mechanical
+rebase of 2/2.  For v4 I rebuilt 2/2 with CONFIG_DRM_NOUVEAU_BACKLIGHT
+set to y and to n, because the patch splits the #ifdef block in two and
+that is where a change of this shape tends to break.
+
+If something about the shape of the series is what is holding it up, I
+would rather hear that than keep rebasing it.
+
+Marek Czernohous (2):
+  drm/nouveau/pci: use config-space MSI rearm on MCP79/MCP7A (NVAC)
+  drm/nouveau/kms: guard NULL crtc in nv50_sor_atomic_disable()
+
+ drivers/gpu/drm/nouveau/dispnv50/disp.c       | 30 +++++++++++++---
+ .../gpu/drm/nouveau/include/nvkm/subdev/pci.h |  1 +
+ .../gpu/drm/nouveau/nvkm/engine/device/base.c |  2 +-
+ .../gpu/drm/nouveau/nvkm/subdev/pci/Kbuild    |  1 +
+ .../gpu/drm/nouveau/nvkm/subdev/pci/mcp79.c   | 35 +++++++++++++++++++
+ 5 files changed, 63 insertions(+), 6 deletions(-)
+ create mode 100644 drivers/gpu/drm/nouveau/nvkm/subdev/pci/mcp79.c
+
+
+base-commit: c21bb4193868a8de71fc4693fa741e195fdf5d86
+-- 
+2.54.0
+

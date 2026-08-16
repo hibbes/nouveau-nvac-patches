@@ -1,7 +1,7 @@
 From 72a21ddc97d985f6c763e7b3a8bc73e430300c30 Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
 Date: Sun, 16 Aug 2026 09:46:35 +0200
-Subject: [PATCH 2/2] drm/nouveau/kms: guard NULL crtc in
+Subject: [PATCH v4 2/2] drm/nouveau/kms: guard NULL crtc in
  nv50_sor_atomic_disable()
 
 nv50_sor_atomic_disable() unconditionally computes

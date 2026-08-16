@@ -1,7 +1,7 @@
 From 9894229dd3394cb67a051c104df74f4a13004f7f Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
 Date: Sun, 16 Aug 2026 09:44:03 +0200
-Subject: [PATCH 1/2] drm/nouveau/pci: use config-space MSI rearm on
+Subject: [PATCH v4 1/2] drm/nouveau/pci: use config-space MSI rearm on
  MCP79/MCP7A (NVAC)
 
 NVAC (MCP79/MCP7A) uses g94_pci_func, whose .msi_rearm is
@@ -126,8 +126,6 @@ index 000000000000..e2ae242f1aa7
 +{
 +	return nvkm_pci_new_(&mcp79_pci_func, device, type, inst, ppci);
 +}
-
-base-commit: c21bb4193868a8de71fc4693fa741e195fdf5d86
 -- 
 2.54.0
 
