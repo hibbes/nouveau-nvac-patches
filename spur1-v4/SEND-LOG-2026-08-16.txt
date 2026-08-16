@@ -69,3 +69,51 @@ sodass `commit <sha> ("Titel")` in hoechstens zwei Zeilen passt.
 
 Zwei Sichten noetig: **nouveau** (dort liegen Fab Stz' Testberichte) und
 **dri-devel** (dort und nur dort antwortet der sashiko-bot).
+
+# ============================================================
+# NACHTRAG 16.08. 15:25: der sashiko-bot hat nach 9 Minuten geantwortet
+# ============================================================
+
+Mail 20260816131755.1B99B1F000E9@smtp.kernel.org, Antwort auf 2/2, nur auf
+dri-devel (auf nouveau existiert sie nicht).
+
+**Ein Befund, ausdruecklich als "Pre-existing issues" markiert und mit dem
+Satz "This isn't a bug introduced by this patch".** Also kein Regress, anders
+als bei teardown v1.
+
+Befund [High]: 2/2 schuetze nv50_sor_atomic_disable(), lasse aber
+nv50_msto_atomic_disable() mit derselben Struktur ungeschuetzt, msto->mstc
+koenne NULL sein und mstc->mstm dann faulten.
+
+## Selbst nachgeprueft gegen c21bb4193868: der Befund trifft zu
+
+  :1070  msto->mstc = mstc;                    <- gesetzt in .atomic_enable
+  :1079  struct nv50_mstc *mstc = msto->mstc;  <- ungeprueft in .atomic_disable
+  :1080  struct nv50_mstm *mstm = mstc->mstm;
+  :1082  if (msto->head->func->display_id)     <- msto->head ebenfalls ungeprueft
+
+Dieselbe Lebensdauer wie nv_encoder->crtc in 2/2.
+
+## Und eine Stelle, die der Bot NICHT gesehen hat
+
+nv50_msto_cleanup() ist genauso betroffen, und frueher als das disable:
+
+  :906   ... drm_atomic_get_mst_payload_state(old_mst_state, msto->mstc->port);
+  :907   struct nv50_mstc *mstc = msto->mstc;
+  :908   struct nv50_mstm *mstm = mstc->mstm;
+  :912   if (msto->disabled) {
+  :918       msto->mstc = NULL;
+
+Alle drei Zugriffe stehen ueber der Pruefung, die den Zeiger leert.
+
+## Haltung
+
+Nicht Teil dieser Serie. 2/2 behebt etwas, das auf echter Hardware auftrat
+und reproduzierbar ist. Das hier ist DisplayPort-MST, dafuer gibt es hier
+keinen Aufbau, ein Guard waere gegen einen Pfad geschrieben, der sich nicht
+ausueben laesst. Antwort auf der Liste entworfen, Versand nach Freigabe.
+
+## Zaehlfalle fuer das Briefing
+
+/all/ fuehrt jede Mail einmal PRO LISTE. Gemessen: /nouveau/ 3, /dri-devel/ 4,
+/all/ 7. Die /all/-Zahl ist die Summe, nicht die Zahl der Mails.
