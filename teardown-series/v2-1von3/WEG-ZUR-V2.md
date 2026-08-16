@@ -104,3 +104,43 @@ gesperrt, auch mit Chrome headless.
 Modulbau rc=0, 0 Warnungen (Diff-Hash identisch zur gebauten Fassung,
 `908fc2e9bdca…`, daher kein Neubau noetig). checkpatch --strict 0/0/0.
 Basis `c21bb4193868`. Zweig `teardown-1von3-v2`. **NICHT GESENDET.**
+
+## Nachtrag 16.08. nach dem Versand: lore ist doch erreichbar, und der Closes: ist falsch
+
+**lore ist von gentoo-neo aus NICHT gesperrt.** Anubis blockt nur die HTML-
+und `/raw`-Sichten (403). Der Endpunkt `t.mbox.gz` liefert 200. Das
+Morgen-Briefing benutzt ihn seit jeher, mir ist der Widerspruch erst nach dem
+Versand aufgefallen.
+
+Damit liess sich die Zuschreibung endlich direkt belegen. Die Bot-Mail
+`20260812233022.159301F000E9@smtp.kernel.org` (Antwort auf 1/4 der
+Viererserie) sagt woertlich:
+
+> `- [High] Canceling `uevent_work` before destroying `fctx->event` in
+> `nouveau_fence_context_del` leaves a window for use-after-free.`
+
+Das ist genau dieser Patch, und der Bot nennt es **use-after-free**, also
+genau die Formulierung, auf die der Commit-Text heute korrigiert wurde.
+`Reported-by: sashiko-bot` steht zu Recht.
+
+**Aber der `Closes:` ist falsch gezielt.** Gesendet wurde
+
+    Closes: https://lore.kernel.org/nouveau/20260812231330.705425-1-mczernohous@gmail.com/
+
+Das loest auf, zeigt aber auf die **nouveau**-Sicht des Fadens, und dort
+existieren die Bot-Mails nicht. Gemessen:
+
+| Sicht der Viererserie | Mails | Bot-Mails |
+|---|---|---|
+| `/dri-devel/` | 7 | 2 |
+| `/nouveau/` | 5 | **0** |
+| `/nouveau/<bot-msgid>/` | **HTTP 404** | |
+
+Wer dem Verweis folgt, findet den zitierten Bericht also nicht. Richtig waere
+
+    Closes: https://lore.kernel.org/all/20260812233022.159301F000E9@smtp.kernel.org/
+
+**Lehre:** fuer Verweise auf Fremdmails immer `/all/<message-id>/`, nie die
+Serien-Wurzel und nie eine Listensicht ohne Gegenprobe, dass die zitierte Mail
+dort existiert. Im Memory als
+`reference_lore_mbox_endpoint_umgeht_anubis.md`.
