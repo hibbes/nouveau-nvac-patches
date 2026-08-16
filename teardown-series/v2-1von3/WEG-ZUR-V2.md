@@ -5,28 +5,34 @@
 | | Aenderung | Ergebnis |
 |---|---|---|
 | v1 (15.08., gesendet) | `dtor` nach vorne | **zurueckgezogen**, fuehrte TOCTOU ein |
-| v2, erster Anlauf | `cancel` nach hinten | verworfen, siehe unten |
-| v2, final | `cancel_work_sync` -> `disable_work_sync` | eine Zeile, keine Umstellung |
+| v2, erster Anlauf | `cancel` nach hinten | verworfen, aber aus falschem Grund, siehe unten |
+| v2, final | `cancel_work_sync` -> `disable_work_sync` | ein Wort, keine Umstellung |
 
-## Warum der erste v2-Anlauf verworfen wurde
+## Warum der erste v2-Anlauf verworfen wurde, und warum die Begruendung nicht trug
 
-Die adversariale Pruefung am 16.08. (20 Agenten, eine Linse rein destruktiv)
-lieferte 16 Befunde, **alle bestaetigt, keiner widerlegt**. Vier davon
-kreisten um dasselbe: die Umstellung liess `nouveau_fence_uevent_work()`
-erstmals zeitgleich mit `nvif_event_dtor()` laufen, und die Arbeit ruft ueber
-`nouveau_fence_update()` selbst `nvif_event_block(&fctx->event)`. Das ist
-derselbe ungeschuetzte Zugriff, den v1 zu Fall gebracht hatte, nur ueber
-einen anderen Aufrufer.
+Die Pruefung am 16.08. verwarf den Anlauf mit dem Argument, die Umstellung
+lasse `nouveau_fence_uevent_work()` zeitgleich mit `nvif_event_dtor()` laufen,
+und die Arbeit rufe ueber `nouveau_fence_update()` selbst
+`nvif_event_block(&fctx->event)`.
 
-Ein weiterer Befund nannte die Loesung: **`disable_work_sync()`**. Laut
-Kerneldoc erhoeht sie den disable-Zaehler, und "as long as the disable count
-is non-zero, any attempt to queue @work will fail and return %false". Sie
-leert also wie `cancel_work_sync()` UND verhindert das Neueinreihen.
+**Dieses Argument ist falsch, gegen den Quelltext geprueft.**
+`nouveau_fence_update()` erreicht `nvif_event_block()` nur bei gesetztem
+`drop` (`nouveau_fence.c:138-139`), und `drop` entsteht ausschliesslich in der
+Schleife ueber `fctx->pending` (`:130-136`). `nouveau_fence_context_kill()`
+leert diese Liste vollstaendig und setzt `fctx->killed` unter `fctx->lock`
+(`:85-92`), danach weist `nouveau_fence_emit()` mit `-ENODEV` ab. Nach dem
+`kill` ist die Liste dauerhaft leer, der Aufruf findet also gar nicht statt.
 
-Damit bleibt die Mainline-Reihenfolge unangetastet, und die ganze
-Reihenfolgefrage stellt sich nicht mehr.
+Der zweite Drain hinter dem `dtor` waere damit **sicher** und haette zudem
+nach 6.6.y zurueckportiert werden koennen. `disable_work_sync()` ist trotzdem
+die bessere Wahl fuer mainline, aber aus anderen Gruenden: ein
+Synchronisationspunkt statt zwei, die Arbeit wird gar nicht erst eingereiht
+statt hinterher aufgeraeumt, und es ist das in drm etablierte Idiom
+(`drm/xe`, `drm/panthor`, `drm_pagemap`, sieben Dateien im Baum).
 
-## Was die Pruefung sonst noch korrigiert hat
+Diese Begruendung steht jetzt so im Commit-Text, samt der Alternative.
+
+## Was die Pruefungen sonst korrigiert haben
 
 - Die Behauptung, das Fenster reiche bis zum `dtor`, war zu weit. Es endet in
   zwei Stufen: der `kill` blockt das Event (`atomic_xchg(&ntfy->allowed, 0)`,
@@ -37,18 +43,64 @@ Reihenfolgefrage stellt sich nicht mehr.
   Tragend ist der Test in `__dma_fence_enable_signaling()` selbst (`:639`),
   der unter der Fence-Sperre laeuft, und die ist `fctx->lock`.
 - `nouveau_fence_context_free()` ist ein `kref_put()`, kein unbedingtes
-  Freigeben. Emittierte Fences halten eigene Referenzen.
-- Der `Link:` zeigte auf die eigene zurueckgezogene 1/3 statt auf den Bericht
-  des Bots. Korrigiert.
+  Freigeben. Emittierte Fences halten eigene Referenzen. Das ist aber **kein
+  Schutznetz**: haelt keine mehr eine, faellt der Zaehler sofort auf null.
+- **Der Schaden ist der blanke Use-after-free**, nichts weiter.
+  `struct work_struct uevent_work` liegt eingebettet in `fctx`
+  (`nouveau_fence.h:53`), `nouveau_fence_context_put()` gibt per `kfree()` frei
+  (`:114`). Die Workqueue dereferenziert also schon beim Aufgreifen
+  freigegebenen Speicher. Mit `CONFIG_DEBUG_OBJECTS_WORK` und
+  `CONFIG_DEBUG_OBJECTS_FREE` wird das als Freigabe eines aktiven Objekts
+  gemeldet (`mm/slub.c:2608`, `kernel/workqueue.c:680`).
+
+## Korrektur an dieser Datei selbst (16.08.)
+
+Zwei Saetze frueherer Fassungen waren falsch und sind hier ersetzt:
+
+1. *"Der `Link:` zeigte auf die eigene zurueckgezogene 1/3 statt auf den
+   Bericht des Bots."* Falsch. Der v1-Verweis zeigte auf
+   `sashiko.dev/#/patchset/20260812231330...?part=1`, also sehr wohl auf die
+   Bot-Durchsicht der Viererserie. Das echte Problem war ein anderes: es ist
+   eine JS-Fragment-URL statt eines dauerhaften Archivverweises. In der v2
+   war er dann faelschlich auf die `[Critical]`-Mail **zur zurueckgezogenen
+   v1** umgebogen, also auf eine Kritik am eigenen Patch statt auf den
+   Fehlerbericht. Jetzt: `Closes:` auf die lore-Thread-URL der Viererserie,
+   dieselbe, die schon im Cover der Serie stand.
+
+2. *"Kein Langzeitzweig liegt in dieser Luecke."* Falsch, siehe unten.
 
 ## Randbedingung fuer stable
 
-`disable_work_sync()` gibt es seit **v6.10** (`86898fa6b8cd`), der Fehler
-existiert seit **v6.8** (`39126abc5e20`). Kein Langzeitzweig liegt in dieser
-Luecke, aber der Commit-Text sagt es, damit ein stable-Maintainer es nicht
-selbst herausfinden muss.
+`disable_work_sync()` gibt es seit **v6.10**
+(commit `86898fa6b8cd ("workqueue: Implement disable/enable for (delayed)
+work items")`, laut `git describe --contains` in `v6.10-rc1~137^2^2~12`).
+
+Der Fehler kam mit
+commit `39126abc5e20 ("nouveau: offload fence uevents work to workqueue")`,
+und dieser Commit trug selbst `Cc: linux-stable@vger.kernel.org`. Er wurde
+zurueckportiert: **CVE-2024-26719**, behoben in **6.6.18** (Backport
+`cc0037fa592d`) und **6.7.6** (`985d053f7633`).
+
+Damit liegt **linux-6.6.y** genau in der Luecke: Longterm-Zweig, traegt den
+Fehler, hat `disable_work_sync()` nicht. Der Patch wuerde dort sauber
+anwenden und dann am unbekannten Symbol scheitern.
+
+Konsequenz im Trailer, Form nach
+`Documentation/process/stable-kernel-rules.rst:111-119`:
+
+    Cc: <stable@vger.kernel.org> # 6.10.x
+
+Der Commit-Text nennt zusaetzlich die Form, die eine 6.6.y-Fassung braechte
+(der zweite Drain), damit ein stable-Maintainer nicht raten muss.
+
+**Nicht lokal pruefbar:** der Arbeitsbaum hat nur die Remotes `origin`
+(torvalds) und `netdev`, keinen stable-Baum. Die Versionsangaben stammen aus
+dem CVE-Datensatz (`cveawg.mitre.org/api/cve/CVE-2024-26719`), nicht aus
+eigener Anschauung. lore und cgit sind von diesem Host aus durch Anubis
+gesperrt, auch mit Chrome headless.
 
 ## Stand
 
-Modulbau rc=0, 0 Warnungen. checkpatch 0/0/0. Basis `c21bb4193868`.
-Zweig `teardown-1von3-v2`. **NICHT GESENDET.**
+Modulbau rc=0, 0 Warnungen (Diff-Hash identisch zur gebauten Fassung,
+`908fc2e9bdca…`, daher kein Neubau noetig). checkpatch --strict 0/0/0.
+Basis `c21bb4193868`. Zweig `teardown-1von3-v2`. **NICHT GESENDET.**
