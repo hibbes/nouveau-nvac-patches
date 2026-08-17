@@ -1,5 +1,11 @@
 # nv04_fifo Recovery Implementation Plan
 
+> **Status 2026-08-17: historical, archived.** The checkboxes below were never
+> ticked off. The two-tier nv04-FIFO recovery was implemented as patches
+> 0006/0020/0023/0024, and the v3 four-patch series went to the list on
+> 2026-08-13; the deeper Tesla recovery is held for v4. Authoritative submission
+> state: `SUBMISSION-STATUS.md` in the repo root. This plan is kept for history.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Implement zweistufige Recovery-Pipeline in `drivers/gpu/drm/nouveau/nvkm/engine/fifo/` (Tier-1 channel-kill via `nvkm_chan_error`, Tier-2 device-wedge via `drm_dev_wedged_event`) plus tracepoints und module params, so dass Tesla-FIFO-Faults nicht mehr silent durchlaufen.
