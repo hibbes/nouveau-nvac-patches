@@ -1,0 +1,164 @@
+Subject: [PATCH 2/2] drm/nouveau/kms: don't map the scanout buffer in panic
+ context
+
+nv50_wndw_get_scanout_buffer() calls nouveau_bo_map(), which takes the
+buffer object reservation and ends in ioremap() for VRAM.  drm_panic
+calls ->get_scanout_buffer() under drm_panic_trylock(), which is a
+raw_spin_trylock_irqsave(), so neither is allowed there: the reservation
+is a sleeping lock, and ioremap() reaches __get_vm_area_node(), which
+BUG()s when called from interrupt context.
+
+On a Mac mini 3,1 (MCP79, GeForce 9400M) this turns every panic into a
+second oops inside panic(), and no panic screen is drawn.
+
+drm_panic documents the way out: anything set up by
+&drm_plane_helper_funcs.prepare_fb and torn down by ->cleanup_fb may be
+used from panic context, and for that window the framebuffer is pinned.
+Map it there, and let ->get_scanout_buffer() hand out only what is
+already mapped.
+
+A flag in the plane state records which state holds the reference.
+->prepare_fb() runs once per new plane state and ->cleanup_fb() once for
+every state it succeeded on, but not for the plane whose ->prepare_fb()
+failed: drm_atomic_helper_prepare_planes() skips exactly that one on its
+error path.  The mapping is therefore the last thing ->prepare_fb() does,
+behind every error return, so nothing has to be unwound by hand.  The
+flag must not be inherited by nv50_wndw_atomic_duplicate_state(), which
+allocates with kmalloc_obj() and copies field by field.
+
+Deliberately not tied to bo->pin_count.  Cursor and overlay planes share
+this ->prepare_fb()/->cleanup_fb() pair without having
+->get_scanout_buffer(), and dma-buf importers pin the same buffer object
+too, so the last unpin is not the last unmap.
+
+The cost is one ttm_bo_kmap()/ttm_bo_kunmap() pair per page flip whenever
+the framebuffer changes, which for VRAM means a BAR1 window and an
+ioremap_wc() of the framebuffer.  A framebuffer that stays put, such as
+an fbdev console, is mapped once.  CONFIG_DRM_PANIC=n pays nothing.
+
+Fixes: 1d26c846f3ff ("drm/nouveau: Add drm_panic support for nv50+")
+
+---
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/atom.h b/drivers/gpu/drm/nouveau/dispnv50/atom.h
+index c34a42ea9ac4..16c93d5c6e8c 100644
+--- a/drivers/gpu/drm/nouveau/dispnv50/atom.h
++++ b/drivers/gpu/drm/nouveau/dispnv50/atom.h
+@@ -191,6 +191,12 @@ struct nv50_wndw_atom {
+ 	struct drm_property_blob *ilut;
+ 	bool visible;
+ 
++	/* Set while this plane state holds a reference on the CPU mapping of
++	 * its framebuffer, for drm_panic.  Must not be inherited by a
++	 * duplicated state.
++	 */
++	bool panic_map;
++
+ 	struct {
+ 		u32  handle;
+ 		u16  offset:12;
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/wndw.c b/drivers/gpu/drm/nouveau/dispnv50/wndw.c
+index 2635458d52ac..8d7b0c6f47bd 100644
+--- a/drivers/gpu/drm/nouveau/dispnv50/wndw.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/wndw.c
+@@ -524,6 +524,7 @@ static void
+ nv50_wndw_cleanup_fb(struct drm_plane *plane, struct drm_plane_state *old_state)
+ {
+ 	struct nouveau_drm *drm = nouveau_drm(plane->dev);
++	struct nv50_wndw_atom *armw = nv50_wndw_atom(old_state);
+ 	struct nouveau_bo *nvbo;
+ 
+ 	NV_ATOMIC(drm, "%s cleanup: %p\n", plane->name, old_state->fb);
+@@ -531,6 +532,10 @@ nv50_wndw_cleanup_fb(struct drm_plane *plane, struct drm_plane_state *old_state)
+ 		return;
+ 
+ 	nvbo = nouveau_gem_object(old_state->fb->obj[0]);
++	if (armw->panic_map) {
++		armw->panic_map = false;
++		nouveau_bo_unmap(nvbo);
++	}
+ 	nouveau_bo_unpin(nvbo);
+ }
+ 
+@@ -590,6 +595,24 @@ nv50_wndw_prepare_fb(struct drm_plane *plane, struct drm_plane_state *state)
+ 		wndw->func->prepare(wndw, asyh, asyw);
+ 	}
+ 
++	/* drm_panic runs ->get_scanout_buffer() from panic context, under a raw
++	 * spinlock, so that callback cannot map anything.  Map the framebuffer
++	 * here instead: anything set up between ->prepare_fb() and
++	 * ->cleanup_fb() may be used from panic context, and the framebuffer is
++	 * pinned for exactly that window.
++	 *
++	 * This has to stay behind the last error return of this function.
++	 * drm_atomic_helper_prepare_planes() does not call ->cleanup_fb() for
++	 * the plane whose ->prepare_fb() failed, so anything taken before an
++	 * error return would have to be released by hand.
++	 *
++	 * Best effort: without a mapping there is simply no panic screen.
++	 */
++	if (IS_ENABLED(CONFIG_DRM_PANIC) &&
++	    plane->helper_private->get_scanout_buffer &&
++	    !nouveau_bo_map(nvbo))
++		asyw->panic_map = true;
++
+ 	return 0;
+ }
+ 
+@@ -651,6 +674,7 @@ static int
+ nv50_wndw_get_scanout_buffer(struct drm_plane *plane, struct drm_scanout_buffer *sb)
+ {
+ 	struct drm_framebuffer *fb;
++	struct nv50_wndw_atom *armw;
+ 	struct nouveau_bo *nvbo;
+ 	struct nouveau_drm *drm = nouveau_drm(plane->dev);
+ 	u16 chipset = drm->client.device.info.chipset;
+@@ -661,6 +685,7 @@ nv50_wndw_get_scanout_buffer(struct drm_plane *plane, struct drm_scanout_buffer
+ 	if (!plane->state || !plane->state->fb)
+ 		return -EINVAL;
+ 
++	armw = nv50_wndw_atom(plane->state);
+ 	fb = plane->state->fb;
+ 	nvbo = nouveau_gem_object(fb->obj[0]);
+ 
+@@ -668,10 +693,12 @@ nv50_wndw_get_scanout_buffer(struct drm_plane *plane, struct drm_scanout_buffer
+ 	if (nvbo->comp || fb->format->num_planes != 1)
+ 		return -EOPNOTSUPP;
+ 
+-	if (nouveau_bo_map(nvbo)) {
+-		drm_warn(plane->dev, "nouveau bo map failed, panic won't be displayed\n");
+-		return -ENOMEM;
+-	}
++	/* Mapping the framebuffer here would sleep and ioremap(), both
++	 * forbidden in panic context.  nv50_wndw_prepare_fb() has done it for
++	 * this plane state, or there is no panic screen for this framebuffer.
++	 */
++	if (!armw->panic_map || !nvbo->kmap.virtual)
++		return -ENODEV;
+ 
+ 	if (nvbo->kmap.bo_kmap_type & TTM_BO_MAP_IOMEM_MASK)
+ 		iosys_map_set_vaddr_iomem(&sb->map[0], (void __iomem *)nvbo->kmap.virtual);
+@@ -721,6 +748,16 @@ nv50_wndw_atomic_destroy_state(struct drm_plane *plane,
+ 			       struct drm_plane_state *state)
+ {
+ 	struct nv50_wndw_atom *asyw = nv50_wndw_atom(state);
++
++	/* Every state that ever held the mapping went through ->cleanup_fb()
++	 * first: nv50_wndw_reset() only runs from drm_mode_config_reset(),
++	 * which nouveau reaches either with plane->state still NULL, or from
++	 * drm_atomic_helper_resume() after drm_atomic_helper_suspend() has
++	 * disabled all planes, and drm_plane_cleanup() only runs after
++	 * nouveau_display_fini() has called drm_atomic_helper_shutdown().
++	 */
++	WARN_ON(asyw->panic_map);
++
+ 	__drm_atomic_helper_plane_destroy_state(&asyw->state);
+ 	kfree(asyw);
+ }
+@@ -736,6 +773,7 @@ nv50_wndw_atomic_duplicate_state(struct drm_plane *plane)
+ 	asyw->sema = armw->sema;
+ 	asyw->ntfy = armw->ntfy;
+ 	asyw->ilut = NULL;
++	asyw->panic_map = false;
+ 	asyw->xlut = armw->xlut;
+ 	asyw->csc  = armw->csc;
+ 	asyw->image = armw->image;

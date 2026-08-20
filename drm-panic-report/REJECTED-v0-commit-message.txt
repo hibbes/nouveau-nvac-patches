@@ -1,0 +1,50 @@
+drm/nouveau: don't map the scanout buffer in panic context
+
+nv50_wndw_get_scanout_buffer() calls nouveau_bo_map(), which takes
+ttm_bo_reserve() and ends in ioremap() for VRAM.  drm_panic calls
+->get_scanout_buffer() under drm_panic_trylock(), which is a
+raw_spin_trylock_irqsave(), so both are forbidden there: the
+reservation is a sleeping lock, and ioremap() reaches
+__get_vm_area_node(), which BUG()s when called from interrupt
+context.
+
+On a Mac mini 3,1 (MCP79, GeForce 9400M) this turns every panic into
+a second oops inside panic(), and no panic screen is drawn.
+
+drm_panic already documents the way out: everything established by
+&drm_plane_helper_funcs.prepare_fb and torn down by ->cleanup_fb may
+be used from panic context.  Take the mapping there, and let
+->get_scanout_buffer() only hand out what is already mapped.
+
+A flag in the plane state records which state holds the mapping.
+->prepare_fb() runs once per new plane state and ->cleanup_fb() once
+per old plane state, on the success path and on both failure paths,
+so the pairing is exact.  The flag must not be inherited by
+nv50_wndw_atomic_duplicate_state(), which allocates with
+kmalloc_obj() and copies field by field.  Deliberately not tied to
+bo->pin_count: cursor and overlay planes and dma-buf importers pin
+the same buffer object without ever mapping it, so the last unpin is
+not the last unmap.
+
+Holding a mapping across a commit is only safe once the mapping
+itself is reference counted.  TTM asks the driver to set up the
+aperture only for the first mapping of a resource, but to tear it
+down on every ttm_bo_kunmap()/ttm_bo_vunmap(), and
+nouveau_ttm_io_mem_free_locked() then drops the BAR1 window
+unconditionally.  A second ttm_bo_kmap() of the same buffer object is
+therefore not a second mapping, it is a second owner of the first
+one, and the first teardown leaves the others pointing into BAR1
+space that has since been handed to somebody else.  The fbdev damage
+blit does exactly this on every console update: it vmaps and vunmaps
+the scanout buffer object through drm_gem_ttm_vmap().
+
+So funnel every kernel CPU mapping of a nouveau buffer object through
+nvbo->kmap and count it, the way qxl, loongson and
+drm_gem_vram_helper already do.  ->vmap/->vunmap and the pushbuf
+relocation path use the counted helpers, and a mapped object is kept
+off the io_reserve_lru, so that the -ENOSPC path of
+nouveau_ttm_io_mem_reserve() cannot revoke a mapping that is still in
+use.
+
+Fixes: 1d26c846f3ff ("drm/nouveau: Add drm_panic support for nv50+")
+Cc: stable@vger.kernel.org # v6.13+
