@@ -1,0 +1,43 @@
+==========================================================================
+20.08 13:55  Re: [PATCH v2] drm/nouveau: disable the fence uevent work in
+--------------------------------------------------------------------------
+This makes sense to me.
+Reviewed-by: Lyude Paul <lyude@redhat.com>
+Will push to drm-misc-next-fixes in just a moment
+   [... Zitat ...]
+==========================================================================
+20.08 14:08  Re: [PATCH v2] drm/nouveau: disable the fence uevent work in
+--------------------------------------------------------------------------
+(I misspoke, this patch ended up in drm-misc-next instead as fixes is
+currently closed)
+   [... Zitat ...]
+==========================================================================
+20.08 14:13  Re: [PATCH 2/3] drm/nouveau: cancel the DP IRQ work before f
+--------------------------------------------------------------------------
+Reviewed-by: Lyude Paul <lyude@redhat.com>
+   [... Zitat ...]
+==========================================================================
+20.08 14:26  Re: [PATCH 2/3] drm/nouveau: cancel the DP IRQ work before f
+--------------------------------------------------------------------------
+   [... Zitat ...]
+I wrote a lot of that code, so I can just send out a patch for it in a
+moment and CC you.
+==========================================================================
+20.08 14:27  Re: [PATCH 2/3] drm/nouveau: cancel the DP IRQ work before f
+--------------------------------------------------------------------------
+Reviewed-by: Lyude Paul <lyude@redhat.com>
+   [... Zitat ...]
+==========================================================================
+20.08 14:28  Re: [PATCH 3/3] drm/nouveau: don't dereference outp before c
+--------------------------------------------------------------------------
+Reviewed-by: Lyude Paul <lyude@redhat.com>
+   [... Zitat ...]
+==========================================================================
+20.08 14:36  Re: [PATCH 2/3] drm/nouveau: cancel the DP IRQ work before f
+--------------------------------------------------------------------------
+   [... Zitat ...]
+Actually - after rereading this again, nah - this isn't an issue. So
+long as the connector IRQs are blocked at that point, it should be
+good. MST connectors aren't, but that's also fine - they use the IRQ
+notify thingies of the non-MST connectors, so they're indirectly
+blocked by that.
