@@ -1,0 +1,162 @@
+{
+  "befunde": [
+    {
+      "frage": "(a) Hat nouveau auf Tesla einen Erholungspfad fuer einen PGRAPH-Trap? Kernbefund am GR-Interrupt.",
+      "antwort": "Nein, widerspruchsfrei belegt. nv50_gr_intr() holt den Kanal per nvkm_chan_get_inst() ausschliesslich, um Name und ID in die Fehlerzeile zu schreiben, und gibt ihn danach mit nvkm_chan_put() wieder her. Zwischen Zeile 640 und 675 steht kein nvkm_chan_error(), kein Reset, kein Fence-Signal, kein Ruecksprung in irgendeine Recovery. Der einzige Zustandseingriff ist das Quittieren (0x400100 = stat) und das Wiederfreigeben des Methodenzugriffs (0x400500 = 0x00010001, Zeile 660-661). Der Trap wird gemeldet und fallengelassen, exakt wie im Befund vom 13.08. beschrieben.",
+      "beleg": "/home/neo/linux-nouveau-patches @c21bb4193868 drivers/gpu/drm/nouveau/nvkm/engine/gr/nv50.c:619-676 (Kanalzugriff 640-644, Quittung 660-661, chan_put 675)",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(a) Wird der CCACHE-Trap anders behandelt als andere PGRAPH-Traps?",
+      "antwort": "Ja, und das ist die eigentliche Luecke. Der M2MF-Zweig (status & 0x002) und der STRMOUT-Zweig (status & 0x008) setzen die betroffene Untereinheit ueber das PGRAPH-Register 0x400040 zurueck (schreiben 2 bzw. 0x80, dann 0), mit dem Kommentar \"No sane way found yet -- just reset the bugger.\" Der CCACHE-Zweig (status & 0x010) und der VFETCH-Zweig (status & 0x004) tun das nicht: sie schreiben nur 0x405018 = 0xc0000000 und 0x400108 = 0x010 bzw. 0x004, also reines Quittieren. Die faultende Einheit bleibt danach mit ihrer nie beantworteten Speicheranforderung stehen.",
+      "beleg": "/home/neo/linux-nouveau-patches @c21bb4193868 nvkm/engine/gr/nv50.c: M2MF-Reset 499-501, STRMOUT-Reset 542-544, VFETCH ohne Reset 522-524, CCACHE ohne Reset 569-571",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(a) Vollstaendige Aufrufersuche: wer ruft nvkm_chan_error() ueberhaupt auf?",
+      "antwort": "Sieben Aufrufstellen im ganzen Treiber, keine davon auf Tesla erreichbar: fifo/gf100.c:343 (Fermi-PBDMA-Interrupt), fifo/gv100.c:158 (CTXNOTVALID), fifo/ga100.c:205 und 244, fifo/runl.c:80 (die generische Runlist-Recovery), sowie gsp/rm/r535/fifo.c:356 (GSP-Firmwarepfad). In nvkm/engine/gr/ steht der Aufruf kein einziges Mal, in fifo/nv04.c, fifo/nv50.c und fifo/g84.c ebenfalls nicht. Die Behauptung \"Tesla hat keinen Erholungspfad\" ist damit nicht plausibel, sondern durch Abwesenheit jedes Aufrufers bewiesen.",
+      "beleg": "git grep nvkm_chan_error @c21bb4193868: chan.c:227 (Definition), chan.h:63 (Deklaration), ga100.c:205,244, gf100.c:343, gv100.c:158, runl.c:80, gsp/rm/r535/fifo.c:356",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(a) Der VM-Fault wird von zwei Subdevs gesehen. Reagiert wenigstens PFB darauf?",
+      "antwort": "Nein. nv50_fb_intr() liest den Fault-Latch (0x100c90/0x100c94), quittiert ihn (0x100c90 = idx | 0x80000000), holt ueber nvkm_chan_get_inst() den Kanal, druckt die bekannte Zeile \"trapped read at ... client 05 [CCACHE] ... reason 2 [PAGE_NOT_PRESENT]\" und legt den Kanal wieder weg. Identische Form wie nv50_gr_intr: Kanalzeiger in der Hand, keine Konsequenz. Der Fault wird also zweimal unabhaengig gemeldet und zweimal verworfen.",
+      "beleg": "/home/neo/linux-nouveau-patches @c21bb4193868 nvkm/subdev/fb/nv50.c:134-192 (chan_get_inst 180, Ausgabe 181-190, chan_put 191)",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(a) Warum meldet PFIFO nichts? PFIFO_INTR war 0.",
+      "antwort": "Weil PFIFO auf Tesla gar keine Quelle fuer diesen Fehler kennt. nv04_fifo_intr() behandelt nur CACHE_ERROR, DMA_PUSHER, SEMAPHORE und auf NV_50 zwei Zusatzbits (0x10 und 0x40000000 nonstall). Es gibt keinen MMU-Fault-Zweig und keinen Kontextwechsel-Timeout wie auf Fermi+. Der Messwert bestaetigt das: PFIFO_INTR = 0, PFIFO_PULL0 = 0x90000001 (ACCESS gesetzt, HASH_FAILED und HASH_BUSY und ACQUIRE_BUSY alle 0, SEMAPHORE_ERROR 0). Aus Sicht von PFIFO liegt kein Fehler vor, GR ist lediglich \"beschaeftigt\". Deshalb laeuft nv04_fifo_intr in diesem Vorfall nicht ein einziges Mal.",
+      "beleg": "nvkm/engine/fifo/nv04.c:421-459 (Interrupt-Zweige); PULL0-Bitfelder envytools rnndb/fifo/g80_pfifo.xml reg PULL0 (ACCESS pos 0, HASH_FAILED 4, HASH_BUSY 12, ACQUIRE_BUSY 16, STATUS 31:28 undokumentiert); Messwert /home/neo/projects/nouveau-nvac-patches/docs/2026-08-13-pgraph-ccache-hang/pgraph-hang.txt",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(a) Belegt das Registerbild, dass wirklich CCACHE haengt?",
+      "antwort": "Ja, in zwei unabhaengigen Registern. PGRAPH_STATUS = 0x00000503 zerfaellt nach der Bitliste in ALL (Bit 0) plus DISPATCH (Bit 1) plus CTXPROG (Bit 8) plus CCACHE_PREGEOM (Bit 10). PGRAPH_VSTATUS0 = 0x00000008 ist in 3-Bit-Feldern organisiert: Feld VFETCH (Bits 2:0) = 0 = IDLE, Feld CCACHE (Bits 5:3) = 1 = BUSY. Also genau eine Einheit haengt, und es ist die, die getrappt hat. Das deckt sich mit der Dekodiertabelle, die der Treiber selbst mitbringt.",
+      "beleg": "envytools rnndb/graph/g80_pgraph/pgraph.xml reg 0x0700 STATUS und reg 0x0380 VSTATUS_0; Treibertabellen nvkm/engine/gr/g84.c:30-57 (nv50_gr_status) und 59-69 (nv50_gr_vstatus_0), Auswertung g84.c:104-108",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(a) Warum haengt danach auch der Kontextwechsel, also die WARNING in g84.c:132?",
+      "antwort": "g84_ectx_bind() im Unbind-Zweig (cctx == NULL) schreibt chan->inst>>12 nach 0x0032fc und wartet 2000 ms darauf, dass die Hardware mit 0xffffffff quittiert. Diese Quittung kommt vom ctxprog, dem Kontextwechsel-Mikroprogramm, das nouveau selbst erzeugt. Dessen Save-Routine wartet zuerst darauf, dass PGRAPH idle wird (cp_wait STATUS, dann cp_bra STATUS BUSY zurueck auf cp_setup_save, also eine Schleife). Mit dauerhaft busy gemeldetem CCACHE laeuft der ctxprog nie aus dieser Schleife heraus, was genau das gemessene CTXPROG-Bit in PGRAPH_STATUS erklaert. Der Stacktrace der WARNING zeigt den Weg: nvkm_uchan_object_fini_1 -> nvkm_chan_cctx_bind(chan, engn, NULL) -> g84_ectx_bind.",
+      "beleg": "nvkm/engine/fifo/g84.c:105-152 (Unbind-Handshake 129-135, Timeout-Zeile 132); nvkm/engine/gr/ctxnv50.c:205-212 (cp_setup_save-Schleife); Aufrufer nvkm/engine/fifo/uchan.c:75-95, speziell 87; Stacktrace /home/neo/projects/nouveau-nvac-patches/docs/2026-08-13-pgraph-ccache-hang/capture.txt:165-170",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(a) Warum kommt \"failed to idle channel 5\" statt \"channel 5 killed!\"?",
+      "antwort": "Weil chan->killed nie gesetzt wird. Der Setzweg ist nouveau_channel_killed() (der Callback des abonnierten ERRORED-Events) -> nouveau_channel_kill() -> atomic_set(&chan->killed, 1) plus nouveau_fence_context_kill(). Das Event entsteht aber ausschliesslich in nvkm_chan_error() (fifo/chan.c:237), und das wurde nie gerufen. Folglich ist in nouveau_channel_idle() die Bedingung !atomic_read(&chan->killed) wahr, es wird ein frisches Fence angelegt und darauf gewartet, bis der Timeout zuschlaegt, und erst dann erscheint die Fehlerzeile. Genau das ist der beobachtete Verzug von rund 90 s zwischen Trap und erster Symptommeldung.",
+      "beleg": "nouveau_chan.c:43-49 (kill), 51-63 (killed-Callback), 65-86 (idle, Bedingung Zeile 68, Meldung Zeile 80); Ereignisquelle nvkm/engine/fifo/chan.c:226-240, speziell 237",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(b) Was tut Fermi+ an dieser Stelle anders? Erster Unterschied: wohin der Fault gemeldet wird.",
+      "antwort": "Auf Fermi+ ist der VM-Fault kein PGRAPH-Trap, sondern ein MMU-Fault, den PFIFO entgegennimmt. gf100_fifo_mmu_fault_recover() sucht die Engine ueber die Fault-ID, behandelt BAR-Faults gesondert, holt den Kanal und ruft dann nvkm_runl_rc_cgrp(chan->cgrp). Der Fault landet also bei der Instanz, die Kanaele ueberhaupt abschalten darf. Auf Tesla landet er bei PGRAPH und PFB, die beide keine solche Befugnis ausueben. Das ist der strukturelle Kern des Unterschieds.",
+      "beleg": "nvkm/engine/fifo/gf100.c:533-605, Recovery-Aufruf Zeile 600-602; Funktionstabelle gf100_fifo_mmu_fault Zeile 607-615 mit .recover",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(b) Zweiter Unterschied: Fermi+ hat einen Kontextwechsel-Wachhund, Tesla nicht.",
+      "antwort": "gf100_fifo_intr_ctxsw_timeout() blockiert bei einem Kontextwechsel-Timeout die Runlist und loest auf allen betroffenen Engines gezielt einen MMU-Fault aus, um die Recovery in Gang zu setzen. tu102_fifo_intr_ctxsw_timeout_info() wertet das Timeout-Info-Feld aus (LOAD, SAVE, SWITCH), bestimmt die haengende Kanalgruppe und ruft nvkm_runl_rc_cgrp(). Tesla hat weder eine solche Interruptquelle noch einen Timer. Genau der Zustand, der auf Fermi+ diesen Wachhund ausloesen wuerde (ctxprog haengt im Save), ist auf NVAC gemessen worden und blieb folgenlos.",
+      "beleg": "nvkm/engine/fifo/gf100.c:617-642; nvkm/engine/fifo/tu102.c:130-166, Recovery-Aufruf 163; Gegenprobe nvkm/engine/fifo/nv04.c:421-459 ohne jede Timeout-Quelle",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(b) Was macht die generische Recovery, wenn sie einmal angestossen ist?",
+      "antwort": "nvkm_runl_rc_cgrp() markiert die Kanalgruppe, nvkm_runl_rc_runl() blockiert die Runlist, preemptet sie und stellt einen Workqueue-Job ein. Der laeuft nvkm_runl_rc(): fuer jeden markierten Kanal nvkm_chan_error() plus nvkm_chan_remove_locked(), dann Warten bis die PBDMAs idle sind, dann fuer jede Engine, die noch auf einer markierten Gruppe steht, WARN_ON(nvkm_engine_reset(engn->engine)), dann Runlist neu schreiben und Fault-Zustand loeschen. Der entscheidende Punkt fuer Tesla: die Engine-Reset-Schleife laeuft ueber nvkm_runl_foreach_engn_cond(engn, runl, engn->func->cxid), und weder nv50_engn noch g84_engn haben ein .cxid. Die Schleife waere auf Tesla leer.",
+      "beleg": "nvkm/engine/fifo/runl.c:57-129 (chan_error 80, cxid-Bedingung 101, Engine-Reset 117), 131-169; Funktionstabellen ohne .cxid: nvkm/engine/fifo/nv50.c:204-209 (nv50_engn) und nvkm/engine/fifo/g84.c:154-159 (g84_engn)",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(b) Fehlen auf Tesla noch weitere Bausteine, die die generische Recovery voraussetzt?",
+      "antwort": "Ja, drei. nv50_chan (fifo/nv50.c:138-147) hat kein .preempt, deshalb ist nvkm_chan_preempt() dort ein sofortiges return 0 und nvkm_chan_error(chan, true) waere ein NULL-Sprung; nur die Variante mit preempt=false ist ueberhaupt benutzbar. nv50_runl (fifo/nv50.c:328-336) hat kein .preempt und kein .fault_clear, also entfallen das PBDMA-Idle-Warten (runl.c:87-98) und das Loeschen des Fault-Zustands (runl.c:122-123). Und, siehe oben, .cxid fehlt. Die generische Maschinerie ist also nicht nur nicht angeschlossen, sie ist auf Tesla auch nur teilweise bedienbar.",
+      "beleg": "nvkm/engine/fifo/nv50.c:138-147 (nv50_chan), 328-336 (nv50_runl); nvkm/engine/fifo/chan.c:148-160 (nvkm_chan_preempt, Abbruch Zeile 153-154); nvkm/engine/fifo/runl.c:86-98 und 120-123",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(b) Gibt es einen Hardware-Unterschied, nicht nur einen Treiberunterschied?",
+      "antwort": "Ja, und er ist scharf datiert. Die VSTATUS-Aufzaehlung der Untereinheiten kennt die Werte 0 IDLE, 1 BUSY, 3 WAITING, 5 BLOCKED, 7 PAUSED, und zusaetzlich 2 UNK2 und 6 FAULTED, beide mit variants=\"GF100-\". Der Zustand FAULTED existiert also erst ab Fermi. Auf G80 bis GT21x meldet eine Einheit, die auf einem VM-Fault haengt, schlicht BUSY, ununterscheidbar von \"arbeitet gerade lange\". Unser Messwert VSTATUS0 = 0x08, Feld CCACHE = 1 = BUSY, ist genau dieser Fall. Ein Wachhund kann auf Tesla die haengende Einheit deshalb nicht am Zustandsfeld erkennen, sondern nur an der Heuristik \"PGRAPH_STATUS ungleich 0 und ueber Sekunden unveraendert, waehrend PFIFO_CACHE1_GET unter PUT klebt\", also genau der im README nachgetragenen Korrektur.",
+      "beleg": "envytools rnndb/g80_defs.xml:47-55 (enum G80_VSTATUS, FAULTED nur variants GF100-); Messwert pgraph-hang.txt VSTATUS0 = 00000008",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(b) Wie sieht der Fermi-Engine-Reset konkret aus, den Tesla nachbauen muesste?",
+      "antwort": "gf100_gr_reset() ist das Rezept in sechs Schritten: Methodenzugriff abschalten (0x400500 Bit 0 = 0), FECS-Pipeline anhalten, subdev->func->fini(subdev, NVKM_POWEROFF), nvkm_mc_disable() also PMC_ENABLE-Bit loeschen, optional gpccs zuruecksetzen, nvkm_mc_enable(), subdev->func->init(subdev). Auf Tesla gibt es keinen FECS-Falcon, der Rest ist eins zu eins uebertragbar: 0x400500 kennt nouveau dort bereits (g84_gr_tlb_flush maskiert Bit 0 aus und wieder ein), fini und init sind vorhanden, und die PMC-Maske liegt in der Chip-Tabelle.",
+      "beleg": "nvkm/engine/gr/gf100.c:2323-2340; Tesla-Gegenstuecke: nvkm/engine/gr/g84.c:114-175 (0x400500-Maskierung 128 und 172), nvkm/engine/gr/nv50.c:678-760 (nv50_gr_init)",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(c) Fehlt der Tesla-Hardware ein Reset, oder fehlt nur Treibercode? Erste Ebene: Untereinheit.",
+      "antwort": "Der Hardware fehlt nichts. Das PGRAPH-Register 0x400040 heisst in der Registerdatenbank DISABLE mit dem Untertitel \"Disable / reset subunits\" und der Beschreibung: \"Writing 1 to a bit disables given subunit, causes it to disappear from MMIO, and [at least sometimes] resets its state.\" Bit 3 ist CCACHE. Bit 1 ist M2MF, Bit 7 ist STRMOUT, und genau diese beiden Bits schreibt nouveau heute schon in den entsprechenden Trap-Zweigen (0x400040 = 2 bzw. 0x80, dann 0). Die Bitzuordnung stimmt in beide Richtungen: TRAP-Statusbit 3 STRMOUT entspricht DISABLE-Bit 7, TRAP-Statusbit 4 CCACHE entspricht DISABLE-Bit 3. Der fehlende Erholungsversuch fuer CCACHE besteht aus zwei Registerschreibzugriffen, die im selben Quelltext zweimal danebenstehen.",
+      "beleg": "envytools rnndb/graph/g80_pgraph/pgraph.xml reg32 offset 0x0040 name DISABLE (CCACHE pos 3, M2MF pos 1, STRMOUT pos 7); Verwendung im Treiber nvkm/engine/gr/nv50.c:499-501 und 542-544; Fehlstelle nvkm/engine/gr/nv50.c:569-571",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(c) Zweite Ebene: gibt es einen Reset der ganzen GR-Engine, und kennt nouveau ihn auf NVAC?",
+      "antwort": "Ja, und er wird bereits benutzt. NVAC (Chipsatz 0xac, MCP79/MCP7A) laedt g98_mc, dessen Reset-Tabelle NVKM_ENGINE_GR die PMC_ENABLE-Maske 0x00201000 zuordnet, also Bit 12 PGRAPH plus Bit 21 PGRAPH CHSW. nvkm_mc_reset() macht daraus disable gefolgt von enable, und nvkm_subdev_fini_() ruft das am Ende jedes fini unbedingt auf. Der Reset laeuft also auf dieser Maschine bei jedem Suspend und bei jedem Modul-Entladen. Der Messwert stuetzt das: PMC_ENABLE stand im Haenger auf 0xdff3d113, Bit 12 und Bit 21 beide gesetzt, die Engine war eingeschaltet und getaktet (PTIMER_LOW lief), nur eben blockiert.",
+      "beleg": "nvkm/engine/device/base.c:1225-1253 (nvac_chipset, mc g98_mc_new, gr mcp79_gr_new, fifo g98_fifo_new), 3307; nvkm/subdev/mc/g98.c:26-35 (GR = 0x00201000); nvkm/subdev/mc/base.c:50-79; nvkm/core/subdev.c:85; envytools docs/hw/bus/pmc.rst (G80:GF100 Bit 8 PFIFO, Bit 12 PGRAPH, Bit 21 PGRAPH CHSW; \"Most engines disappear from MMIO space and reset to default state when disabled\")",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(c) Was steht der Nutzung dieses Resets im Treiber konkret im Weg?",
+      "antwort": "Eine einzige fehlende Funktionszeigerbelegung. nvkm_engine_reset() nimmt zuerst engine->func->reset, wenn gesetzt, und faellt nur sonst auf fini(POWEROFF) plus init zurueck. Fuer jede GR-Engine ist engine->func die Tabelle nvkm_gr, und die setzt .reset = nvkm_gr_reset. nvkm_gr_reset() wiederum ruft gr->func->reset, und wenn das NULL ist, gibt es -ENOSYS zurueck. mcp79_gr hat kein .reset. Ergebnis: auf Tesla-GR liefert nvkm_engine_reset() -ENOSYS, der generische Fallback wird durch die Zwischenschicht verdeckt und kommt nie zum Zug. Selbst wenn jemand die generische Recovery auf Tesla anschliessen wuerde, bliebe an runl.c:117 nur ein WARN_ON uebrig.",
+      "beleg": "nvkm/core/engine.c:38-46; nvkm/engine/gr/base.c:148-157 (nvkm_gr_reset, -ENOSYS in Zeile 156), 188-201 (.reset = nvkm_gr_reset in Zeile 194), 203-209 (Verdrahtung fuer alle GR-Chips); nvkm/engine/gr/mcp79.c:28-42 (kein .reset, kein .fini, kein .tlb_flush)",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(c) Kleiner Baubarkeitsvorbehalt: ist nvkm_chan_error() aus dem GR-Code ueberhaupt aufrufbar?",
+      "antwort": "Ja. Die Deklaration liegt im fifo-internen Header engine/fifo/chan.h, den gr/nv50.c heute nicht einbindet (es hat nur engine/fifo.h fuer nvkm_chan_get_inst und nvkm_chan_put). Praezedenzfall existiert aber: gr/nv04.c, gr/nv10.c, gr/nv20.c und weitere binden engine/fifo/chan.h direkt ein, ebenso sw/nv50.c und der GSP-Pfad. Eine zusaetzliche include-Zeile genuegt, es braucht keine neue Schnittstelle.",
+      "beleg": "nvkm/engine/fifo/chan.h:63; heutige Includes nvkm/engine/gr/nv50.c:24-30 und nvkm/subdev/fb/nv50.c:24-29; Praezedenzfaelle nvkm/engine/gr/nv04.c:30, nv10.c:30, nv20.c:8, nvkm/engine/sw/nv50.c:28",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(d) Warum greift Patch 0006 (Tesla-Recovery-Helfer) hier nicht?",
+      "antwort": "Weil er ausschliesslich an PFIFO haengt. Die Patch-Hunks auf nvkm/engine/fifo/nv04.c setzen nv04_fifo_recover() genau zweimal: in nv04_fifo_intr_cache_error (bei @@ -345) und in nv04_fifo_intr_dma_pusher (bei @@ -410). Beide sind Zweige von nv04_fifo_intr, dem PFIFO-Interrupt. Der Fall vom 13.08. kommt aus PGRAPH, und der Messwert PFIFO_INTR = 0x00000000 zeigt, dass nv04_fifo_intr in diesem Vorfall gar nicht angesprungen wurde. Der Helfer konnte nicht greifen, weil sein Aufrufer nie lief.",
+      "beleg": "/home/neo/projects/nouveau-nvac-patches/0006-drm-nouveau-fifo-add-recovery-path-for-Tesla-cache_e.patch, Hunks auf nvkm/engine/fifo/nv04.c @@345 und @@410, Helfer in neuer Datei nvkm/engine/fifo/recover.c; Messwert pgraph-hang.txt PFIFO_INTR 00000000",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(d) Warum greift die Eskalationsleiter aus 0020 (fifo_kill_count) hier nicht?",
+      "antwort": "Aus demselben Grund, eine Ebene hoeher. 0020 aendert nvkm/engine/fifo/recover.c und dessen Aufrufer in nvkm/engine/fifo/nv04.c und fuegt die Modulparameter fifo_kill_count (Vorgabe 3) und fifo_kill_window_ms (Vorgabe 10000) hinzu. Der einzige Eingriff des Patches in den GR-Quelltext ist ein zweifacher Aufruf von nvkm_fifo_note_gr_trap() in nv50_gr_intr, ausdruecklich als \"K2\"-Diagnostik markiert: er setzt nur einen Zeitstempel, damit die spaetere CACHE_ERROR-Logzeile ein Trap-Alter mitfuehren kann. Kein Kill, kein Reset, keine Weiterleitung. Die Leiter zaehlt also PFIFO-Faults und hat den PGRAPH-Trap nur als Fussnote im Log.",
+      "beleg": "/home/neo/projects/nouveau-nvac-patches/0020-drm-nouveau-fifo-cache-error-escalation-ladder.patch, Hunk auf nvkm/engine/gr/nv50.c @@ -649 (nvkm_fifo_note_gr_trap, Kommentar \"0006-v3 K2\"), Hunks auf fifo/recover.c und fifo/nv04.c, Parameter in nouveau_drm.c; laufendes Modul fuehrt die Parameter: /sys/module/nouveau/parameters/{fifo_kill_count,fifo_kill_window_ms,chan_kill_event}",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(d) Warum hilft das Kill-Event-Abo (0020a / 0023) hier nicht?",
+      "antwort": "Weil es die Empfaengerseite repariert, nicht die Senderseite. Upstream haengt das Abo an chan->user.oclass >= FERMI_CHANNEL_GPFIFO; NVAC benutzt aber G82_CHANNEL_GPFIFO (in g98_fifo.chan gesetzt), liegt also darunter und abonniert nie. Der lokale Patch senkt dieses Gate ueber den Modulparameter chan_kill_event auf NV50_CHANNEL_GPFIFO. Das Ereignis selbst entsteht jedoch ausschliesslich in nvkm_chan_error() (nvkm_event_ntfy mit NVKM_CHAN_EVENT_ERRORED). Ohne Absender nuetzt der beste Abonnent nichts. Der 13.08.-Fall ist damit sogar der Beleg dafuer, dass das Abo-Gate nur die halbe Miete war.",
+      "beleg": "Upstream-Gate nouveau_chan.c:366-385; Kanalklasse nvkm/engine/fifo/g98.c:62 (G82_CHANNEL_GPFIFO); Ereignisquelle nvkm/engine/fifo/chan.c:226-240 (Zeile 237); lokaler Patch /home/neo/projects/nouveau-nvac-patches/0023-drm-nouveau-subscribe-kill-event-after-fence-context.patch (entfernter Block mit dem chan_kill_event-Gate)",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(d) Haette die Leiter geholfen, wenn sie hier gezuendet haette?",
+      "antwort": "Nur zur Haelfte, und das ist wichtig fuer die v4-Ueberarbeitung. Ein Tier-1-Kill laeuft ueber nvkm_chan_error -> nvkm_chan_block_locked -> chan->func->stop, und nv50_chan_stop loescht ausschliesslich Bit 31 im Runlist-Eintrag 0x002600 + chid*4. Das ist reines PFIFO. PGRAPH mit haengendem CCACHE, busy DISPATCH und in der Save-Schleife stehendem CTXPROG wuerde davon nicht beruehrt. Die Fences waeren durch das ERRORED-Event freigegeben worden, labwc und die TTM-Worker haetten sich geloest, die Sitzung waere am Leben geblieben. Die GPU-Beschleunigung waere trotzdem tot gewesen, weil jeder neue Kontextwechsel wieder im 2000-ms-Timeout von g84_ectx_bind gelandet waere. Kanal toeten und Engine erholen sind hier zwei getrennte Aufgaben.",
+      "beleg": "nvkm/engine/fifo/nv50.c:47-53 (nv50_chan_stop); nvkm/engine/fifo/chan.c:218-240; nvkm/engine/fifo/g84.c:129-135; Messwert PGRAPH_STATUS 00000503 stabil",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(e) Waere ein GPU-Reset moeglich? Stufe 1, der billige Versuch.",
+      "antwort": "Ja, und er ist die naheliegendste Massnahme: im CCACHE-Zweig von nv50_gr_trap_handler 0x400040 = 0x08 schreiben und sofort wieder 0, genau wie es zwei Zweige darueber fuer M2MF und STRMOUT geschieht. Kosten praktisch null: zwei MMIO-Schreibzugriffe im ohnehin laufenden Interrupt, kein Kontextverlust, kein Reinit, keine Auswirkung auf andere Kanaele. Risiko und Vorbehalt sind ebenfalls dokumentiert: die Registerbeschreibung sagt nur \"[at least sometimes] resets its state\", also keine Garantie, dass eine bereits ausstehende gefaultete Speicheranforderung damit verschwindet. Und sie warnt: \"Trying to launch a ctxprog xfer touching a disabled subunit is a bad idea\", der Disable-Zustand muss also transient bleiben, was das Muster wr(0x08); wr(0x00) genau einhaelt.",
+      "beleg": "envytools rnndb/graph/g80_pgraph/pgraph.xml reg 0x0040 DISABLE (Beschreibungstext und Warnung, CCACHE pos 3); Vorbild im Treiber nvkm/engine/gr/nv50.c:499-501 und 542-544; Einbaustelle nvkm/engine/gr/nv50.c:569-571",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(e) Stufe 2, der harte Reset ueber PMC_ENABLE: moeglich, und was kostet er?",
+      "antwort": "Moeglich, denn die Maske existiert, ist NVAC-spezifisch hinterlegt (0x00201000 = PGRAPH plus PGRAPH CHSW) und wird bei jedem fini ohnehin gefahren. Der Preis ist auf dieser Maschine bereits vermessen worden, allerdings an der Nachbarengine: Patch 0014 macht genau das fuer PDISPLAY (PMC_ENABLE Bit 30). Dessen Befund uebertraegt sich: erstens hat ein blosser Kanal-fini/init den gelatchten Hardwarezustand nicht geloest, nur der PMC-Zyklus hat es getan; zweitens liest waehrend der Abschaltphase der gesamte MMIO-Bereich der Engine Muell, weshalb der Interrupt-Handler ueber nvkm_inth_block ausgesperrt und die IRQ-Freigaben vorher genullt werden muessen; drittens kommt die Engine blank hoch und muss vollstaendig neu initialisiert werden. Fuer PGRAPH kommt hinzu, dass Bit 21 die PGRAPH-CHSW-Einheit von PFIFO mit abschaltet, PFIFO also fuer die Dauer anzuhalten ist; die Funktion dafuer ist vorhanden (g98_fifo.pause = nv04_fifo_pause).",
+      "beleg": "/home/neo/nvac-v2-qa/0014-drm-nouveau-disp-pmc-pdisplay-reset-unwedge.patch (Kopf: Patch 0010 belegte, dass fini/init nicht reicht; Muell-MMIO und inth_block; \"Engine kommt blank hoch\"); nvkm/subdev/mc/g98.c:32; envytools docs/hw/bus/pmc.rst Bit 21 PGRAPH CHSW; nvkm/engine/fifo/nv04.c:212-244 (nv04_fifo_pause), Einbindung nvkm/engine/fifo/g98.c:55",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(e) Was genau geht bei Stufe 2 auf der GR-Seite verloren?",
+      "antwort": "Der Wiederanlauf ist nv50_gr_init, und der ist explizit destruktiv fuer den Kontextzustand: er quittiert saemtliche Trap-Register neu, laedt ueber nv50_grctx_init das ctxprog und die Vorgabe-Kontextwerte komplett neu hoch, und nullt danach 0x400824, 0x400828, 0x40082c, 0x400830 sowie 0x40032c (CTXCTL_CUR, aktueller Kanal) und 0x400330 (CTXCTL_NEXT). PGRAPH weiss nach dem Reset also nicht mehr, welcher Kanal geladen war; der Kontext des im Moment residenten Kanals wird nie zurueckgeschrieben und ist verloren. Zeitlich liegt das in derselben Groessenordnung wie ein Resume, also Millisekunden, nicht Sekunden. Der Preis ist somit: ein sicher verlorener Kanal (der Verursacher) plus eine vollstaendige Neuinitialisierung der Engine, gegen einen sonst unvermeidlichen Neustart der Maschine.",
+      "beleg": "nvkm/engine/gr/nv50.c:678-760, speziell 688-694 (Traps), 718-721 (nv50_grctx_init), 723-728 (Kontextzeiger genullt); Registerbedeutung envytools rnndb/graph/g80_pgraph/pgraph.xml reg 0x032c CTXCTL_CUR \"Current channel\" und 0x0330 CTXCTL_NEXT",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(e) Was ist am Reset-Vorschlag noch nicht belegt?",
+      "antwort": "Zwei Dinge, und sie sind ausdruecklich als offen zu fuehren. Erstens ist nicht gemessen, ob ein PMC_ENABLE-Zyklus auf das PGRAPH-Bit die Engine im konkreten CCACHE-Fault-Zustand tatsaechlich zurueckholt; das haelt schon der eigene README als offenen Punkt fest, und die PDISPLAY-Analogie ist ein starkes Indiz, aber kein Beweis fuer eine andere Engine. Zweitens ist nicht gemessen, ob Kanaele ausser dem Verursacher einen solchen Reset ueberleben, also ob ihre in Instanzspeicher liegenden Kontexte und eng-Zeiger nach nv50_gr_init wieder tragen. Beides ist ein Experiment, keine Schlussfolgerung, und sollte nicht aus einem Einzelfall vorweggenommen werden.",
+      "beleg": "/home/neo/projects/nouveau-nvac-patches/docs/2026-08-13-pgraph-ccache-hang/README.md, Abschnitt \"Offen\", letzter Punkt (\"Ob ein PMC_ENABLE-Toggle auf das PGRAPH-Bit die Engine zurueckholt, ist nicht probiert worden\")",
+      "sicherheit": "offen"
+    }
+  ],
+  "fazit": "Aus der Erholungs-Perspektive sitzt dieser Anteil vollstaendig in nouveau, genauer im nvkm-Teil fuer Tesla. Der VM-Fault wird zweimal unabhaengig gemeldet (PGRAPH als TRAP_CCACHE, PFB als trapped read), beide Melder haben den Kanalzeiger in der Hand, und beide legen ihn ungenutzt wieder weg: nvkm_chan_error() wird im gesamten Treiber nur von Fermi, Volta, Ampere, der generischen Runlist-Recovery und dem GSP-Pfad gerufen, von keiner einzigen Stelle auf Tesla. Die Hardware ist dabei nicht der Engpass: das PGRAPH-Register 0x400040 hat ein dokumentiertes CCACHE-Reset-Bit, das nouveau fuer M2MF und STRMOUT zwei Zweige weiter oben bereits benutzt, und die PMC_ENABLE-Maske fuer einen vollen GR-Reset steht NVAC-spezifisch in g98_mc_reset und wird bei jedem fini gefahren; was fehlt, ist die Belegung von nvkm_gr_func.reset fuer nv50, ohne die nvkm_engine_reset() auf Tesla-GR mit -ENOSYS abbricht. Die lokalen Patches 0006, 0020 und 0023 konnten nicht greifen, weil sie ausschliesslich an nv04_fifo_intr haengen und PFIFO_INTR in diesem Vorfall 0 war; ihr einziger Eingriff in den GR-Code ist ein Zeitstempel fuer eine Logzeile. Ein echter Erholungspfad braucht hier zwei getrennte Stufen, den Kanal-Kill fuer die Fences und einen PGRAPH-Reset fuer die Engine, denn nv50_chan_stop fasst nur den Runlist-Eintrag an und liesse die Engine weiter stehen.",
+  "zuordnung": "nouveau"
+}

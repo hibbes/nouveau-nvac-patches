@@ -1,0 +1,96 @@
+{
+  "befunde": [
+    {
+      "frage": "(a) Welcher Mesa-Treiber bedient nv50/Tesla auf NVAC, und welche Objektklasse steht im Trap?",
+      "antwort": "Der Gallium-Treiber src/gallium/drivers/nouveau/nv50. Fuer Chipsatz 0xac (NVAC/MCP79) waehlt er NVA0_3D_CLASS. Das ist genau die Klasse 8397 aus dem Log. Subkanal 3 ist bei diesem Treiber fest das 3D-Objekt, Methode 0x0f04 ist NV50_3D_CB_DATA(0), also der Dateneingang fuer Konstantenpuffer. Die Signatur benennt damit eindeutig Mesa-nv50-Code, nicht irgendeinen anderen Client.",
+      "beleg": "mesa-26.1.6/src/gallium/drivers/nouveau/nv50/nv50_screen.c:794-816 (Chipsatz-Switch, case 0xac -> NVA0_3D_CLASS); nv50_winsys.h:42 (#define SUBC_3D(m) 3, (m)); nv50_3d.xml.h:523 (#define NV50_3D_CB_DATA(i0) (0x00000f04 + 0x4*(i0))); /var/log/kernel/log-2026-08-13-14:04:05.gz:7044",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(a) Welcher Mesa-Codepfad emittiert CB_DATA, und was sagt die 64-KiB-Ausrichtung der Fehleradresse?",
+      "antwort": "CB_DATA ist bei nv50 der normale Uploadweg fuer GL-Uniforms. Fuer den Standard-Uniformblock schreibt nv50_constbufs_validate CB_ADDR gefolgt von bis zu NV04_PFIFO_MAX_PACKET_LEN Woertern CB_DATA. Die Basisadresse dazu wird nicht pro Draw gesetzt, sondern einmal beim Kontextaufbau aus screen->uniforms->offset in den Kanalzustand eingebrannt (vier CB_DEF_ADDRESS-Bloecke). Die getroffene Adresse 0x00201b0000 ist exakt 64 KiB ausgerichtet, und screen->uniforms wird mit Ausrichtung 1<<16 und Groesse 5<<16 alloziert. Das passt auf eine Konstantenpuffer-Basis, nicht auf einen beliebigen Offset mitten im Puffer.",
+      "beleg": "mesa-26.1.6/src/gallium/drivers/nouveau/nv50/nv50_shader_state.c:71-80 (User-Constbuf: CB_ADDR + CB_DATA-Schleife) und :86-99 (UBO-Pfad mit CB_DEF_ADDRESS aus res->address); nv50_screen.c:517-536 (CB_DEF_ADDRESS aus screen->uniforms->offset) und :882-883 (nouveau_bo_new align 1<<16, size 5<<16); Logadresse in /var/log/kernel/log-2026-08-13-14:04:05.gz:7045",
+      "sicherheit": "teilweise belegt"
+    },
+    {
+      "frage": "(a) Referenziert Mesa den Uniform-Puffer pro Submit, oder haengt die Adresse frei in der Luft?",
+      "antwort": "Mesa referenziert ihn. nv50_context_create haengt screen->code, screen->uniforms, screen->txc, screen->stack_bo und screen->fence.bo dauerhaft in den bufctx, sie landen also in der Validierungsliste jedes Pushbuffers. Ein reiner Mesa-Buchhaltungsfehler nach dem Muster 'Adresse eingebrannt, BO nie referenziert' scheidet damit aus. Wer behauptet, Mesa habe den Puffer einfach vergessen, hat die Aufrufer nicht gesucht.",
+      "beleg": "mesa-26.1.6/src/gallium/drivers/nouveau/nv50/nv50_context.c:391-399 und :404-407 (BCTX_REFN_bo ... 3D_SCREEN)",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(a) In welchem Zustand ist der nv50-Treiber, gibt es Belege fuer Vernachlaessigung?",
+      "antwort": "Wartungsmodus. Die Upstream-Richtung ist NVK plus Zink, das hilft Tesla nicht, weil es fuer nv50 keinen Vulkan-Treiber gibt. Von 100 Commits an gallium/nouveau seit 2025-01-01 betreffen fast alle nv30 oder treewide-Umbenennungen; echte nv50-Arbeit sind eine Handvoll (nv50_ir_ra, util_framebuffer_init, ein cbuf-Fix in Blits). In der Mesa-CI gibt es Dateien fuer nv49, nv92, gt215, gf108, gk20a, gm206, gm20b, aber nichts fuer NVAC oder allgemein fuer den NVA0_3D_CLASS-Zweig. Genau dieser Zweig hat eigene Sonderpfade im Treiber.",
+      "beleg": "https://gitlab.freedesktop.org/api/v4/projects/176/repository/commits?path=src/gallium/drivers/nouveau&since=2025-01-01T00:00:00Z (Commitliste); mesa-26.1.6/src/gallium/drivers/nouveau/ci/ (Dateiliste ohne nvac/nva0); nv50_shader_state.c:678-704, nv50_vbo.c:716-818, nv50_state.c:1139 und :1203 (NVA0-spezifische Zweige)",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(a) Gibt es bekannte Fehler mit Constant Buffers oder VM-Faults auf nv50, unabhaengig von dieser Maschine?",
+      "antwort": "Ja, und zwar auf praktisch identischer Hardware. Mesa-Issue 15640 vom 11.06.2026, Titel 'gallium/nouveau, nv50/nvac: various errors in the logs TRAP_PROP, SURF_HEIGHT_OVERRUN, PAGE_NOT_PRESENT, CACHE_ERROR', gemeldet von einem anderen Nutzer auf einem iMac 9,1 mit C79 GeForce 9400. Entscheidend: der Melder sagt, die Fehler traten mit Mesa 26.0.8 auf und verschwanden nach Rueckgang auf 25.0.7. Das ist ein Hinweis auf eine Mesa-Regression im Fenster 25.0 bis 26.0 auf nv50. Achtung bei der Zuordnung: sein PAGE_NOT_PRESENT kommt von engine 06 [BAR] / PFIFO_READ, nicht von PGRAPH/CCACHE. Es ist dieselbe Familie, nicht dieselbe Untersignatur.",
+      "beleg": "https://gitlab.freedesktop.org/mesa/mesa/-/issues/15640 (Rohdaten ueber https://gitlab.freedesktop.org/api/v4/projects/176/issues/15640, weil die HTML-Sicht hinter Anubis liegt)",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(b) Hat Mesa nv50 GL-Robustness?",
+      "antwort": "Nein, nur die wirkungslose Haelfte. GL_ARB_robustness ist in Mesa auf dummy_true gesetzt und deshalb immer da, es liefert nur die bereichsgepruefeten Einsprungpunkte. Die Benachrichtigungshaelfte haengt an KHR_robustness, und KHR_robustness wird aus ARB_robust_buffer_access_behavior abgeleitet, das wiederum aus caps.robust_buffer_access_behavior. nvc0 setzt beide Caps, nv50_screen.c setzt keine von beiden. Gemessen: glxinfo auf gentoo-neo listet GL_ARB_robustness, aber kein GL_KHR_robustness und kein GL_ARB_robustness_isolation.",
+      "beleg": "mesa-26.1.6/src/mesa/main/extensions_table.h:116 (ARB_robustness -> dummy_true) und :390; src/mesa/state_tracker/st_extensions.c:1065 und :1747; src/gallium/drivers/nouveau/nvc0/nvc0_screen.c:315 und :328 (nvc0 setzt beides), nv50/nv50_screen.c (setzt keines, grep ohne Treffer); glxinfo-Ausgabe auf gentoo-neo",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(b) Was heisst das konkret fuer Chrome, das eine robuste Kontexterzeugung anfordert?",
+      "antwort": "Chrome bekommt sie nicht und erfaehrt den Kanalverlust nie. Unter EGL, und die Sitzung laeuft als Wayland-Sitzung, haengt Mesa EGL_EXT_create_context_robustness direkt an caps.device_reset_status_query. Gemessen auf dieser Maschine: die Erweiterung fehlt auf GBM, Wayland, X11 und Surfaceless, sie erscheint nur auf der llvmpipe-Geraeteplattform. Unter GLX weist dri_context.c die Anforderung sogar aktiv mit __DRI_CTX_ERROR_UNKNOWN_ATTRIBUTE zurueck, wenn has_reset_status_query falsch ist. Und selbst wenn eine Anwendung glGetGraphicsResetStatusARB pollt: st_init_flush_functions installiert den Treiberhaken nur bei gesetztem Cap, also ist ctx->Driver.GetGraphicsResetStatus auf nv50 NULL und der Aufruf liefert immer GL_NO_ERROR. Ein toter Kanal wird der Anwendung als 'alles in Ordnung' gemeldet.",
+      "beleg": "mesa-26.1.6/src/egl/drivers/dri2/egl_dri2.c:678-685; src/gallium/frontends/dri/dri_screen.c:665 und dri_context.c:71-74, :87-90; src/mesa/state_tracker/st_cb_flush.c:186-188; src/mesa/main/robustness.c:115-144; eglinfo-Messung auf gentoo-neo (ROBUSTNESS: no fuer GBM, Wayland, X11, Surfaceless)",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(b) Was macht Mesa nv50, wenn eine Submission fehlschlaegt oder eine Fence nie signalisiert?",
+      "antwort": "Nichts Brauchbares. PUSH_KICK ist void und wertet den Rueckgabewert des Kernels nur in einem assert aus, das mit ASSERTED markiert ist und im Release-Build wegfaellt. Jeder Fehlschlag beim Einreichen wird also stumm verschluckt, auch in nv50_flush, also im Pfad von glFlush, glFinish und SwapBuffers. Beim Warten ruft _nouveau_fence_wait nouveau_bo_wait auf, und das ist der unbegrenzte CPU_PREP-Ioctl ohne Zeitschranke. Genau dort steht im Mitschnitt labwc: nouveau_gem_ioctl_cpu_prep -> dma_resv_wait_timeout -> dma_fence_default_wait. Userspace hat also weder einen Wachhund noch eine Abbruchmoeglichkeit.",
+      "beleg": "mesa-26.1.6/src/gallium/drivers/nouveau/nouveau_winsys.h:92-100 (PUSH_KICK, int ASSERTED ret, assert(!ret)); nv50/nv50_context.c:42; nouveau_fence.c:259-268; /home/neo/projects/nouveau-nvac-patches/docs/2026-08-13-pgraph-ccache-hang/capture.txt (Stack von PID 76849)",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(b) Gibt es in der installierten Mesa 26.1.6 einen latenten Fehler, der unter Speicherdruck zuschlaegt?",
+      "antwort": "Ja, einen ungefixten. nouveau_fence_new gibt bei fehlgeschlagenem nouveau_bo_new den Speicher frei, setzt *fence aber nicht auf NULL, hinterlaesst also einen baumelnden Zeiger. Beide Aufrufstellen ignorieren den Rueckgabewert (_nouveau_fence_next und nv50_context_create). Upstream ist das am 29.07.2026 als 'nouveau: Fix return of dangling pointer in nouveau_fence_new' mit 'Backport-to: *' behoben worden, in der hier installierten 26.1.6 ist der Fix nicht drin. Der Ausloeser ist eine fehlgeschlagene BO-Allokation, also genau Speicherdruck. Das ist ein Kandidat, kein Nachweis fuer den 13.08.-Fall: die Fence-BOs liegen in GART, nicht in VRAM, und im Log steht keine Allokationsfehlermeldung.",
+      "beleg": "mesa-26.1.6/src/gallium/drivers/nouveau/nouveau_fence.c:37-55 (FREE(*fence) ohne *fence = NULL), :298 und nv50/nv50_context.c:422 (Rueckgabewert ignoriert); https://gitlab.freedesktop.org/api/v4/projects/176/repository/commits/6f19fc972f",
+      "sicherheit": "teilweise belegt"
+    },
+    {
+      "frage": "(c) Was macht Chromes GPU-Prozess anders als eine gewoehnliche GL-Anwendung?",
+      "antwort": "Drei Dinge, die im Log sichtbar sind. Erstens haelt er mehrere nouveau-Kanaele gleichzeitig: Mesa erzeugt genau einen Kanal pro nouveau_screen, im Log stehen pro Chrome-PID die Kanaele 5 und 8 beziehungsweise 9, also mindestens zwei getrennte DRM-Verbindungen aus einem Prozess (Ozone/Wayland: GPU-Hauptthread und Anzeige-Compositor). Zweitens rastert Chrome mit Skia Ganesh ueber GL in vielen kleinen Zeichenoperationen, und jede Uniform-Aktualisierung geht auf nv50 genau durch CB_ADDR/CB_DATA, also durch die Methode, die getrappt ist. Drittens werden staendig Ressourcen weggeworfen: im Mitschnitt haengen dreizehn kworker/uN+ttm in ttm_bo_fini, also im Abbau von Buffer-Objekten. Das ist BO-Umschlag in einer Groessenordnung, die ein Spiel oder ein Compositor nicht erzeugt.",
+      "beleg": "mesa-26.1.6/src/gallium/drivers/nouveau/nouveau_screen.c:396-397 (ein Kanal je Screen); /var/log/kernel/log-2026-08-13-14:04:05.gz:7109-7632 (Kanaele 5, 8, 9 je Chrome-PID); /home/neo/projects/nouveau-nvac-patches/docs/2026-08-13-pgraph-ccache-hang/capture.txt (kworker in ttm_bo_fini); nv50_shader_state.c:71-80",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(c) Wieso wurde aus einem Fault ein vierminuetiger Sturm ueber fuenf Prozesse?",
+      "antwort": "Chromes GPU-Wachhund. kGpuWatchdogTimeout ist auf allen Plattformen ausser macOS und Windows 15 Sekunden. Nach dem Trap um 10:36:25 haengt der GPU-Prozess, der Wachhund toetet ihn, der Browser startet einen neuen, der neue faellt in dieselbe tote Engine. Im Log stehen fuenf Chrome-GPU-PIDs (1174869, 1176213, 1177134, 1177698, 1178313) mit Abstaenden von rund 17 bis 18 Sekunden, also Wachhundzeit plus Abbau. Jeder Abbau haengt zusaetzlich im Kernel: die WARNUNG steht im Pfad nouveau_drm_postclose -> nouveau_abi16_fini -> nouveau_channel_del -> g84_ectx_bind. Chrome faellt erst nach GetFallbackCrashLimit(), auf Linux 3, auf Software zurueck, und zu diesem Zeitpunkt ist die GPU laengst dauerhaft tot. Der Neustartautomatismus hat den Schaden also vervielfacht, statt ihn zu begrenzen.",
+      "beleg": "https://chromium.googlesource.com/chromium/src/+/refs/heads/main/gpu/ipc/common/gpu_watchdog_timeout.h (kGpuWatchdogTimeout = base::Seconds(15) im Nicht-Windows-/Nicht-macOS-Zweig); https://chromium.googlesource.com/chromium/src/+/refs/heads/main/content/browser/gpu/gpu_process_host.cc (GetFallbackCrashLimit, 3 auf Desktop-Linux); /var/log/kernel/log-2026-08-13-14:04:05.gz:7042-7632 und :7507-7511",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(c/d) Chromium hat einen Blocklisteneintrag gegen nouveau. Warum hat er nicht gegriffen?",
+      "antwort": "Weil er auf einen Herstellerstring zielt, den Mesa nicht mehr liefert. Eintrag 30 in software_rendering_list.json lautet 'NVIDIA cards with nouveau drivers in Linux are unstable', Bedingungen vendor_id 0x10de UND gl_vendor '(?i)nouveau.*', Wirkung features ['all']. Mesas nouveau_screen_get_vendor gibt aber 'Mesa' zurueck, und glxinfo auf dieser Maschine bestaetigt: OpenGL vendor string: Mesa. Chromiums StringMismatch nutzt RE2::FullMatch, 'Mesa' fuellt '(?i)nouveau.*' nicht aus, also liefert GLStrings::Contains false und der Eintrag greift nicht. Vor der GL-Initialisierung, wenn gl_vendor leer ist, landet der Eintrag ueber NeedsMoreInfo nur in potential_features, blockiert also auch dort nicht. Auf dieser Maschine sind weder --ignore-gpu-blocklist noch sonst ein Flag gesetzt, die Desktopdateien starten google-chrome-stable nackt. Derselbe tote Schluessel steckt im einzigen nouveau-Eintrag der Treiberfehlerliste (id 389, ausserdem nur ChromeOS). Chromium hat fuer nouveau auf heutigem Mesa faktisch null wirksame Schutzregeln.",
+      "beleg": "https://chromium.googlesource.com/chromium/src/+/refs/heads/main/gpu/config/software_rendering_list.json (Eintrag id 30); https://chromium.googlesource.com/chromium/src/+/refs/heads/main/gpu/config/gpu_control_list.cc Zeilen 108-115 (StringMismatch/RE2::FullMatch), 292-293 (GLStrings::Contains), 604-635 (NeedsMoreInfo), 729-750 (potential_features); https://chromium.googlesource.com/chromium/src/+/refs/heads/main/gpu/config/gpu_driver_bug_list.json (id 389); mesa-26.1.6/src/gallium/drivers/nouveau/nouveau_screen.c:53-56; /usr/share/applications/google-chrome*.desktop",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(d) Gibt es Berichte anderer Nutzer ueber Chrome plus nouveau mit dieser oder aehnlicher Signatur?",
+      "antwort": "Ja, aber keiner deckt sich exakt. Am naechsten dran: Mesa 15640 (nv50/NVAC, C79 GeForce 9400, PAGE_NOT_PRESENT, Mesa-versionsabhaengig, offen seit 06/2026). Mesa 1059 '[NVE4] GPU lockup after opening many tabs in Chromium web browser', seit 2014 offen, gleiche Kausalkette Browserlast plus nouveau plus nicht erholbare Sperre, aber Kepler statt Tesla. Mesa 4193 '[NV50] Freezes with RT_FAULT and RT_LINEAR_MISMATCH', offen seit 2021, dokumentiert dass ein PGRAPH-Trap auf NV50 sich nicht erholt und nur ein Neustart hilft. Mesa 12166 und 12162 (nouveau nv50, Systemeinfrieren beim Fensterschieben ueber Video, als Regression 24.2.4 auf 24.2.7 beschrieben). Ein Bericht mit exakt TRAP_CCACHE plus subclient CB auf NVAC unter Chrome hat sich nicht finden lassen. Auch das Nouveau-Wiki selbst sagt fuer nv50/nvc0 nuechtern: 'If the GPU hangs, you can either reboot or suspend.'",
+      "beleg": "https://gitlab.freedesktop.org/mesa/mesa/-/issues/15640 ; https://gitlab.freedesktop.org/mesa/mesa/-/issues/1059 ; https://gitlab.freedesktop.org/mesa/mesa/-/issues/4193 ; https://gitlab.freedesktop.org/mesa/mesa/-/issues/12166 ; https://nouveau.freedesktop.org/MesaDrivers.html",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(e) Ist die 256-MB-VRAM-Enge ein Faktor?",
+      "antwort": "Ja, und das ist der schaerfste Chromium-Befund. Chrome bemisst sein GPU-seitiges Skia-Budget nach dem Arbeitsspeicher des Rechners, nicht nach dem Videospeicher. DetermineGrCacheLimitsFromAvailableMemory setzt 96 MB Standard, 48 MB auf 'low end' und 256 MB, sobald der physische Arbeitsspeicher mindestens 4096 MiB betraegt, dazu 8 MB Glyphenatlas. gentoo-neo hat 7644 MiB RAM, faellt also in den Hochlastzweig. Mesa meldet fuer diese GPU 247 MB Gesamtvideospeicher und im Leerlauf 198 MB frei. Chrome zielt damit auf ein Ressourcenbudget, das groesser ist als der gesamte Videospeicher, und raeumt aus eigenem Antrieb erst auf, wenn es diese Marke erreicht. Es gibt dafuer mehr als eine GrDirectContext-Instanz (GPU-Haupt und Viz-Compositor), die Caches sind laut Quelltextkommentar nicht geteilt. Praktische Folge: Dauervollstand des VRAM, permanente TTM-Verdraengung, und genau das Bild der dreizehn ttm-Worker im Mitschnitt. BAR1 ist mit 256 MB ebenfalls nicht groesser als der VRAM, entlastet also nicht.",
+      "beleg": "https://chromium.googlesource.com/chromium/src/+/refs/heads/main/gpu/config/skia_limits.cc Zeilen 47-71 (kMaxGaneshResourceCacheBytes 96 MB, kMaxHighEndGaneshResourceCacheBytes 256 MB, kHighEndMemoryThresholdInMB 4096); .../gpu/command_buffer/service/skia_utils.cc:133-136 (Kommentar zu nicht geteilten Caches); /proc/meminfo (MemTotal 7826944 kB = 7644 MiB); glxinfo -B auf gentoo-neo (Video memory 247MB, currently available 198MB)",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "Zusammengefasst: welcher Anteil sitzt wo?",
+      "antwort": "Chromium liefert Last und Verstaerkung, Mesa liefert die fehlerhafte Einreichung und die fehlende Erholungsschnittstelle, nouveau liefert die Toedlichkeit. Chromiums Anteil: ein 256-MB-Budget auf einer 256-MB-GPU, eine Blockliste die auf modernem Mesa nicht mehr greift, ein Wachhund der aus einem Fault fuenf tote Prozesse macht. Mesas Anteil: die getrappte Methode gehoert dem nv50-Uniform-Upload, der Treiber hat fuer NVAC keine CI-Abdeckung, er kennt keine Reset-Status-Abfrage und meldet der Anwendung deshalb GL_NO_ERROR auf einen toten Kanal, und er verschluckt Submissionsfehler im Release-Build. Was Mesa nicht kann, selbst wenn es alles richtig macht: eine haengende Engine zurueckholen. Der Uebergang von 'ein Draw hat gefaultet' zu 'die Maschine ist bis zum Neustart hin' passiert vollstaendig unterhalb von Mesa.",
+      "beleg": "Synthese aus den vorstehenden Befunden; entscheidend nouveau_winsys.h:92-100, st_cb_flush.c:186-188, skia_limits.cc:47-71, software_rendering_list.json id 30",
+      "sicherheit": "teilweise belegt"
+    }
+  ],
+  "fazit": "Aus der Userspace-Linse ist der 13.08.-Haenger kein reines Chromium- und kein reines Mesa-Problem, aber beide tragen nachweisbar bei. Chromium bringt die Ueberlast (256 MB Skia-Budget aus dem Arbeitsspeicher abgeleitet, auf einer GPU mit 247 MB), eine Blockliste die auf heutigem Mesa ins Leere laeuft (Eintrag 30 prueft gl_vendor gegen \"nouveau.*\", Mesa meldet \"Mesa\") und einen Wachhund, der aus einem Fault fuenf tote GPU-Prozesse in vier Minuten macht. Mesa bringt die getrappte Methode selbst (0x0f04 ist der nv50-Uniform-Upload, Klasse 8397 ist der NVAC-Zweig ohne jede CI-Abdeckung) sowie die fehlende Erholungsschnittstelle: nv50 setzt device_reset_status_query nicht, deshalb gibt es keine EGL-Robustness, glGetGraphicsResetStatusARB liefert immer GL_NO_ERROR, PUSH_KICK verschluckt Kernelfehler im Release-Build und die Fence-Wartezeit ist unbegrenzt. Was Userspace dagegen nicht verursacht und auch nicht heilen koennte, ist der Uebergang von \"ein Draw hat gefaultet\" zu \"PGRAPH steht bis zum Neustart\". Alle Mesa-Belege stammen aus dem entpackten /var/cache/distfiles/mesa-26.1.6.tar.xz, also aus genau der installierten Version.",
+  "zuordnung": "geteilt"
+}

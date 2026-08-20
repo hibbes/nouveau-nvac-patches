@@ -1,0 +1,90 @@
+{
+  "befunde": [
+    {
+      "frage": "(a) Wie haelt nouveau auf nv50/Tesla die GPU-Adresse eines Puffers stabil?",
+      "antwort": "Die GPU-Virtuadresse wird genau einmal vergeben, beim Oeffnen des GEM-Handles im Client-VMM (nouveau_vma_new, nouveau_vmm.c:76-121), und ueber nouveau_gem_info_fill als rep->offset an den Userspace gereicht (nouveau_gem.c:314-320). Sie bleibt fuer die Lebensdauer des Handles unveraendert. Eine Migration VRAM<->GART aendert nur den PTE-Inhalt (nouveau_bo_move_ntfy, nouveau_bo.c:1080-1085), nie die Adresse. Genau deshalb ist der Relokations-Zweig in validate_list auf Vor-Tesla beschraenkt (nouveau_gem.c:600: 'if (family < NV_DEVICE_INFO_V0_TESLA)'). Der Kernel verschiebt also auf dieser Maschine grundsaetzlich keine Adresse unter der GPU weg, er kann nur den Inhalt der Seitentabelle falsch oder leer machen.",
+      "beleg": "drivers/gpu/drm/nouveau/nouveau_vmm.c:76-121, nouveau_gem.c:314-320, nouveau_gem.c:600, nouveau_bo.c:1080-1085 (Repo /home/neo/linux-nouveau-patches, c21bb4193868)",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(a) Was garantiert waehrend eines laufenden Jobs, dass die gelisteten Puffer abgebildet bleiben?",
+      "antwort": "Die TTM-Reservierung ueber den gesamten Submit hinweg. validate_init verlangt fuer jeden gelisteten Puffer eine vorhandene VMA (nouveau_gem.c:520-529), validate_list ruft nouveau_bo_validate (nouveau_gem.c:586, holt den Puffer aus TTM_PL_SYSTEM heraus und loest damit erst das Schreiben der PTEs aus) und nouveau_fence_sync (nouveau_gem.c:593). Erst validate_fini_no_ticket haengt den fertigen Fence an und gibt die Reservierung frei: nouveau_bo_fence in Zeile 423, ttm_bo_unreserve erst in Zeile 441. Zwischen Validierung und Fence-Anhaengen kann TTM also nichts verdraengen.",
+      "beleg": "drivers/gpu/drm/nouveau/nouveau_gem.c:520-529, 586, 593, 411-443 (insb. 423 und 441)",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(a) Welche zwei Fence-Anker gibt es und was schuetzen sie jeweils?",
+      "antwort": "Erstens der dma_resv-Fence am Puffer: nouveau_bo_fence -> dma_resv_add_fence (nouveau_bo.c:1472-1480). Er blockt TTM-Moves ueber ttm_bo_wait_ctx (nouveau_bo.c:1164) und die Freigabe. Zweitens ein Letztnutzungs-Fence je VMA: vma->fence, gesetzt in validate_fini_no_ticket nur fuer NVIF_CLASS_VMM_NV50 und aufwaerts (nouveau_gem.c:425-431). Er verhindert, dass beim Schliessen des Handles der Adressbereich an den Allokator zurueckgeht, solange der letzte Job noch laeuft (nouveau_gem_object_unmap, nouveau_gem.c:158-180). Beachte: vma->fence merkt sich nur den zuletzt gesetzten Fence, nicht die Menge aller offenen.",
+      "beleg": "drivers/gpu/drm/nouveau/nouveau_bo.c:1472-1480, 1164; nouveau_gem.c:425-431, 158-180",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(a) Wo hoert die Kernelgarantie auf?",
+      "antwort": "Sie gilt ausschliesslich fuer Puffer, die der Userspace im bo-Array des Pushbufs auffuehrt. nv50 kennt keine Fault-on-Demand-Nachladung: ein Puffer, dessen Adresse im Befehlsstrom steht, der aber nicht gelistet wurde, wird nie validiert, kann in TTM_PL_SYSTEM liegen und hat dann eine reservierte, aber vollstaendig leere Adressregion. Das ist bereits im Anlegen so vorgesehen: nouveau_vma_new nimmt fuer Puffer in TTM_PL_SYSTEM den PTES-Zweig, der nur die Seitentabellen vorbelegt und keine einzige PTE schreibt (nouveau_vmm.c:99-115). Ein leerer PDE liefert auf nv50 den Marker 0xdeadcafe00000000 mit Typfeld 0, also genau PAGE_NOT_PRESENT (vmmnv50.c:109).",
+      "beleg": "drivers/gpu/drm/nouveau/nouveau_vmm.c:99-115, nvkm/subdev/mmu/vmmnv50.c:105-142 (insb. 109)",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(b) Gibt es einen belegbaren Weg, auf dem der Kernel eine Abbildung stillschweigend verliert?",
+      "antwort": "Ja, und er ist der staerkste kernelseitige Kandidat fuer die beobachtete Signatur. In nouveau_bo_move_ntfy wird der Rueckgabewert von nouveau_vma_map verworfen: 'nouveau_vma_map(vma, mem);' ohne Pruefung (nouveau_bo.c:1083). Die Kette dahin: eine LAZY angelegte VMA hat mapref=true (vmm.c:1850), ein vorheriges nouveau_vma_unmap laeuft daher in nvkm_vmm_unmap_locked in den ptes_unmap_put-Zweig und setzt vma->refd auf NVKM_VMA_PAGE_NONE zurueck (vmm.c:1436-1438), womit die Seitentabellen freigegeben sind. Beim naechsten Zurueckwandern nach VRAM/GART geht nvkm_vmm_map_locked deshalb in den allokierenden Zweig (vmm.c:1574-1577) und ruft __nvkm_vmm_ptes_get_map, das bei Speichermangel -ENOMEM liefert und dabei den bereits abgebildeten Anfang wieder abraeumt (vmm.c:786-799). Ergebnis: der Puffer liegt fuer TTM und fuer nouveau resident an einer Adresse, die der Userspace laengst haelt, hat aber null PTEs. nouveau_vma_map setzt in diesem Fall vma->mem gar nicht erst (nouveau_vmm.c:41-45), nouveau_bo_move laeuft weiter und aktualisiert nvbo->offset (nouveau_bo.c:1097-1098). Der naechste GPU-Zugriff ergibt PAGE_NOT_PRESENT. Entscheidend fuer die Beweislage: dieser Fehler ist konstruktionsbedingt stumm, die einzige Ausgabe waere VMM_DEBUG, das im Normalbetrieb aus ist. Das Fehlen einer Kernelzeile entlastet den Kernel hier also nicht.",
+      "beleg": "drivers/gpu/drm/nouveau/nouveau_bo.c:1083 und 1097-1098; nouveau_vmm.c:37-46; nvkm/subdev/mmu/vmm.c:1436-1438, 1574-1577, 786-799, 1850",
+      "sicherheit": "teilweise belegt"
+    },
+    {
+      "frage": "(b) Kann der Kernel eine Abbildung aufheben, obwohl ein Fence noch nicht signalisiert hat?",
+      "antwort": "Ja, an zwei Stellen, beide mit Zeitgrenze und anschliessendem Weitermachen. Erstens nouveau_bo_move_ntfy: dma_resv_wait_timeout(..., DMA_RESV_USAGE_BOOKKEEP, false, 15 * HZ), dann WARN_ON(ret <= 0), dann nouveau_vma_unmap unabhaengig vom Ergebnis (nouveau_bo.c:1087-1093). Zweitens nouveau_gem_object_unmap im kmalloc-Fehlerfall: dma_fence_wait_timeout(fence, false, 2 * HZ), WARN_ON, dann nouveau_gem_object_delete (nouveau_gem.c:171-175). Beide Wege setzen aber einen bereits haengenden Fence voraus, sind also Verstaerker eines schon eingetretenen Hangs, nicht plausible Erstursache. Beide wuerden zudem ein WARN hinterlassen.",
+      "beleg": "drivers/gpu/drm/nouveau/nouveau_bo.c:1087-1093; nouveau_gem.c:171-175",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(b) Gibt es eine Reihenfolgeschwaeche beim Umhaengen waehrend einer Migration?",
+      "antwort": "Ja, aber mit anderer Fehlerwirkung. nouveau_bo_move ruft nouveau_bo_move_ntfy in Zeile 1163, also vor ttm_bo_wait_ctx in Zeile 1164 und weit vor dem eigentlichen Kopieren in Zeile 1207. Zwischen 1083 und 1164 zeigen die PTEs bereits auf das neue, noch uninitialisierte Backing, waehrend eine noch laufende Arbeit die alte Adresse liest. Das erzeugt falsche Daten, nicht aber PAGE_NOT_PRESENT, denn die PTEs sind gueltig. Fuer den 13.08.-Fall scheidet dieser Pfad als Ursache daher aus.",
+      "beleg": "drivers/gpu/drm/nouveau/nouveau_bo.c:1163, 1164, 1207, 1083",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(b) Welche naheliegenden Verdaechtigen scheiden nachweislich aus?",
+      "antwort": "Der io_reserve-Pfad: die -ENOSPC-Verdraengung in nouveau_ttm_io_mem_reserve raeumt ausschliesslich BAR1-Fenster und Userspace-mmaps ab (drm_vma_node_unmap plus nvif_object_unmap_handle, nouveau_bo.c:1342-1356), sie fasst die Kanal-VMM nicht an. Auf diesem Geraet ist BAR1 zudem 256 MB gross und deckt den kompletten VRAM, ein -ENOSPC ist praktisch unerreichbar. Der VM_BIND/uvmm-Pfad: er ist auf nv50 gar nicht erreichbar, nouveau_uvmm_vmm_map kennt nur GF100/GM200/GP100 und antwortet sonst mit WARN_ON und -ENOSYS (nouveau_uvmm.c:147-164). Suspend: nouveau_do_suspend verdraengt zwar allen VRAM (nouveau_drm.c:963), am 13.08. lief die Maschine aber durchgehend (up 79952 s laut Mitschnitt), es gab keinen Suspend.",
+      "beleg": "drivers/gpu/drm/nouveau/nouveau_bo.c:1342-1356; nouveau_uvmm.c:147-164; nouveau_drm.c:963; /home/neo/projects/nouveau-nvac-patches/docs/2026-08-13-pgraph-ccache-hang/capture.txt:1",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(c) Wird ein VM-Fault auf nv50 an den Verursacher zurueckgemeldet?",
+      "antwort": "Nein, er wird ausschliesslich protokolliert. nv50_fb_intr liest den Trap-Latch aus 0x100c90/0x100c94, dekodiert Engine, Client, Subclient und Grund, ruft nvkm_chan_get_inst allein zur Namensbeschaffung, gibt eine nvkm_error-Zeile aus und legt den Kanal wieder ab (fb/nv50.c:135-192). nv50_gr_intr macht dasselbe: Kanal holen fuer Name und ID (gr/nv50.c:640-644), Trap quittieren (660-661), Meldung ausgeben (663-670), nvkm_chan_put (675). Kein nvkm_chan_error, kein Fence-Signal, kein Reset, keine Meldung an den Userspace. Der einzige Ausloeser des KILLED-Ereignisses ist nvkm_event_ntfy(..., NVKM_CHAN_EVENT_ERRORED) in nvkm_chan_error (fifo/chan.c:237), das uchan.c:59 an den Userspace weiterreicht und das nouveau_channel_killed in nouveau_fence_context_kill(chan->fence, -ENODEV) uebersetzt (nouveau_chan.c:44-63). Diese Kette wird auf Tesla nie angestossen.",
+      "beleg": "drivers/gpu/drm/nouveau/nvkm/subdev/fb/nv50.c:135-192; nvkm/engine/gr/nv50.c:620-676; nvkm/engine/fifo/chan.c:226-240 (237); nvkm/engine/fifo/uchan.c:59; nouveau_chan.c:44-63",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(d) Erster Unterschied Tesla gegen Fermi+: die MMU-Fault-Behandlung im FIFO",
+      "antwort": "Der Funktionszeiger .mmu_fault existiert erst ab Fermi. g84_fifo (fifo/g84.c:209-224) und nv50_fifo setzen ihn nicht, gf100_fifo:955 und alle spaeteren tun es. gf100_fifo_mmu_fault_recover gibt dieselbe Art Meldung aus wie nv50_fb_intr, ruft danach aber nvkm_runl_rc_cgrp(chan->cgrp) (gf100.c:602). Von dort geht es in nvkm_runl_rc: nvkm_chan_error fuer jeden Kanal der Gruppe (runl.c:80), Warten auf PBDMA-Leerlauf, nvkm_engine_reset (runl.c:117), Runlist-Update und fault_clear (runl.c:121-123), dann Entsperren. Eine vollstaendige Suche nach nvkm_chan_error im Baum liefert nur gf100.c:343, gv100.c:158, ga100.c:205 und 244, runl.c:80 sowie r535/fifo.c:356. Kein einziger Aufrufer liegt auf einem nv50/g84-Pfad. Genau das erklaert, warum der Fault gemeldet und dann fallengelassen wird.",
+      "beleg": "drivers/gpu/drm/nouveau/nvkm/engine/fifo/g84.c:209-224; fifo/gf100.c:533-605 (602) und 955; fifo/runl.c:57-129 (80, 117, 121-123); Volltextsuche nvkm_chan_error in drivers/gpu/drm/nouveau",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(d) Zweiter Unterschied: selbst mit Erholungspfad koennte PGRAPH auf Tesla nicht zurueckgeholt werden",
+      "antwort": "nvkm_engine_reset greift auf engine->func->reset zu (core/engine.c:38-46), fuer GR ist das nvkm_gr_reset, und das gibt -ENOSYS zurueck, wenn gr->func->reset fehlt (gr/base.c:148-157, eingetragen als .reset in base.c:194). Ein gr->func->reset setzt im ganzen Baum nur gf100 (gr/gf100.c:2516) und die davon abgeleiteten Fermi+-Funktionsstrukturen. mcp79_gr, also die GR dieses Chips, hat keinen (gr/mcp79.c:28-42), ebenso wenig nv50_gr, g84_gr, gt200 oder gt215. Selbst wenn also jemand die RC-Maschinerie auf Tesla anstiesse, endete sie im WARN_ON(nvkm_engine_reset(...)) in runl.c:117 und die Engine bliebe stehen. Die Beobachtung 'Firmware um 10:37:58 erneut geladen, hilft nicht' passt dazu.",
+      "beleg": "drivers/gpu/drm/nouveau/nvkm/core/engine.c:38-46; nvkm/engine/gr/base.c:148-157 und 194; nvkm/engine/gr/gf100.c:2516; nvkm/engine/gr/mcp79.c:28-42; nvkm/engine/fifo/runl.c:117",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(d) Dritter Unterschied: es gibt auf dem Alt-Pfad ueberhaupt keine Hangcheck-Uhr",
+      "antwort": "nouveau_abi16_ioctl_channel_alloc legt einen drm_gpu_scheduler nur fuer VM_BIND-Clients an, mit ausdruecklichem Kommentar: 'If we're not using the VM_BIND uAPI, we don't need a scheduler' (nouveau_abi16.c:442-451). Da uvmm auf nv50 nicht instanziierbar ist (nouveau_uvmm.c:161-164), ist chan->sched auf dieser Maschine immer NULL, und NOUVEAU_SCHED_JOB_TIMEOUT_MS (nouveau_sched.c:409) kommt nie zum Tragen. Ein drm_dev_wedged_event kennt nouveau in diesem Stand gar nicht (Volltextsuche ohne Treffer). Die einzigen Uhren sind die 15 s in nouveau_fence_wait (nouveau_fence.c:331), die zu 'failed to idle channel' fuehren (nouveau_chan.c:79-83), und die 30 s in nouveau_gem_ioctl_cpu_prep (nouveau_gem.c:996-998). Beide laufen ab und melden einen Fehler, keine von beiden repariert etwas. Es existiert kein Zeitgeber, der einen festgefahrenen Tesla-Kanal bemerkt.",
+      "beleg": "drivers/gpu/drm/nouveau/nouveau_abi16.c:442-451; nouveau_uvmm.c:161-164; nouveau_sched.c:409; nouveau_fence.c:331; nouveau_chan.c:79-83; nouveau_gem.c:996-998",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(d) Warum enden 13 Worker uninterruptibel im D-State, labwc aber nicht?",
+      "antwort": "Weil die beiden Warteorte verschieden gebaut sind. ttm_bo_delayed_delete wartet dma_resv_wait_timeout(..., DMA_RESV_USAGE_BOOKKEEP, false, MAX_SCHEDULE_TIMEOUT), also uninterruptibel und ohne jede Zeitgrenze (ttm/ttm_bo.c:241-242). Jeder Puffer des toten Kanals, der freigegeben wird, parkt damit einen kworker fuer immer. Der Mitschnitt zeigt genau das: 13 kworker/uN+ttm mit Stack dma_fence_default_wait <- dma_resv_wait_timeout <- ttm_bo_fini <- process_one_work (ttm_bo_fini ist der 2-Zeilen-Wrapper in ttm_bo.c:328-331, in den ttm_bo_release und ttm_bo_delayed_delete hineingezogen wurden). labwc dagegen haengt in nouveau_gem_ioctl_cpu_prep, das mit intr=true und 30 s wartet (nouveau_gem.c:996-998), daher Zustand Sl+ statt D.",
+      "beleg": "drivers/gpu/drm/ttm/ttm_bo.c:241-242 und 328-331; drivers/gpu/drm/nouveau/nouveau_gem.c:996-998; /home/neo/projects/nouveau-nvac-patches/docs/2026-08-13-pgraph-ccache-hang/capture.txt:11-150",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "Lassen sich die Belege auf Platte gegen den Quelltext halten, und wo sind die Luecken?",
+      "antwort": "Der Mitschnitt bestaetigt die Deutung an drei Stellen. Erstens ist die getrappte Adresse 0x00201b0000 mit rund 8,6 GB weit jenseits der 256 MB VRAM, also eine Virtuadresse im 40-Bit-Raum des drmVmm (nv50_vmm_desc, 12 + 17 + 11 Bit, vmmnv50.c:166-178), keine BAR- oder Physadresse. Zweitens passt die Klasse 8397 zu GT200_TESLA aus der sclass-Liste von mcp79_gr (gr/mcp79.c:39) und mthd 0x0f04 zum Konstantenpuffer, was den Client CCACHE mit Subclient CB erklaert. Drittens steht der WARNING-Ort g84.c:132 exakt auf der nvkm_msec-Warteschleife in g84_ectx_bind, dem Kontext-Abhaengen beim Kanalabbau. Die Luecke: /var/log/kernel ist hier nur fuer root lesbar, und capture.txt enthaelt beide dmesg-Abschnitte nur als letzte 40 Zeilen ab 10:40:33. Ich kann daher nicht pruefen, ob vor 10:36:25 ein WARN aus nouveau_bo.c:1091 stand. Fuer den unter (b) beschriebenen stillen Remap-Fehler waere ohnehin keine Zeile zu erwarten gewesen.",
+      "beleg": "/home/neo/projects/nouveau-nvac-patches/docs/2026-08-13-pgraph-ccache-hang/capture.txt:151-233; drivers/gpu/drm/nouveau/nvkm/subdev/mmu/vmmnv50.c:166-178; nvkm/engine/gr/mcp79.c:39; nvkm/engine/fifo/g84.c:129-136",
+      "sicherheit": "teilweise belegt"
+    }
+  ],
+  "fazit": "Aus der Kernelbrille zerfaellt der Fall sauber in zwei Haelften mit verschiedener Zuordnung. Die zweite Haelfte, also dass ein einzelner VM-Fault die Maschine dauerhaft toetet, ist restlos ein nouveau-Anteil und quellenbelegt: nv50_fb_intr und nv50_gr_intr protokollieren den Fault und lassen ihn fallen, der Funktionszeiger .mmu_fault und damit die gesamte Robust-Channel-Maschinerie existiert erst ab Fermi, ein gr->func->reset fuer Tesla gibt es nicht, und ohne VM_BIND legt nouveau gar keinen Scheduler und damit keine Hangcheck-Uhr an. Die Folge ist zwangslaeufig: kein Kanal-Kill, kein Fence-Signal, und ttm_bo_delayed_delete wartet uninterruptibel ohne Zeitgrenze, weshalb die Worker fuer immer im D-State stehen. Die erste Haelfte, warum die Konstantenpuffer-Adresse nicht abgebildet war, kann ich nicht dem Kernel anlasten, aber auch nicht von ihm freisprechen: es gibt genau einen belegbaren, stillen Kernelweg dorthin, naemlich den verworfenen Rueckgabewert von nouveau_vma_map in nouveau_bo.c:1083, der nach einem fehlgeschlagenen Wiederabbilden einen fuer TTM residenten Puffer ohne eine einzige PTE hinterlaesst, und dieser Weg hinterlaesst konstruktionsbedingt keine Logzeile. Ansonsten ist die Residenzlogik auf Tesla eng und korrekt gebaut, sie deckt aber ausschliesslich Puffer ab, die der Userspace im Pushbuf auffuehrt.",
+  "zuordnung": "geteilt"
+}

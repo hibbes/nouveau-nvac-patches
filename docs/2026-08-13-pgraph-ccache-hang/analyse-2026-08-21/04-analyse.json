@@ -1,0 +1,90 @@
+{
+  "befunde": [
+    {
+      "frage": "(a) Gibt es upstream Berichte zu genau dieser Signatur, TRAP_CCACHE mit Klasse 0x83xx und Methode 0x0f04, gefolgt von 'failed to idle channel'?",
+      "antwort": "Ja, und zwar bis auf die Kernelversion identisch, seit 2011. Maarten Maathuis meldete auf der nouveau-Liste 'CCACHE and VFETCH FAULTs causing lockups' mit 'PGRAPH - ch 2 subc 5 class 0x8297 mthd 0x0f04 data 0x00000000' und unmittelbar folgendem 'Failed to idle channel 3'. Lucas Stach bestaetigte dieselbe Kombination auf NVA8 mit class 0x8397 mthd 0x0f04 bei reinem 2D-Desktopbetrieb ohne 3D-Last. Ben Skeggs antwortete 'You're not the first person to have reported this'. Die Signatur ist also weder neu noch NVAC-spezifisch noch an Chrome gebunden.",
+      "beleg": "https://lore.kernel.org/all/AANLkTik0CkbQz=PoXNG7bQEn_5ssAfp7cr=Z=3qJz6h2@mail.gmail.com/ , https://lore.kernel.org/all/1299442210.2253.9.camel@workstation/ , https://lore.kernel.org/all/1299016269.1822.3.camel@nisroch/",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(a) Was ist 'mthd 0f04' bei class 0x8397, also was hat der Client CCACHE/CB da gelesen?",
+      "antwort": "0x0f00 ist NV50_3D_CB_ADDR, 0x0f04 ist NV50_3D_CB_DATA(0). Die Methode gehoert zum Konstantenpuffer-Pfad der 3D-Klasse, und 0x8397 ist genau die Klasse, die Mesas nv50-Treiber fuer Chipsatz 0xac (NVAC) waehlt. Der Faultclient 05 [CCACHE] subclient 00 [CB] liest also einen Konstantenpuffer, dessen Seite im Kanal-VM nicht praesent ist. Das ist derselbe Methodenwert wie in den Berichten von 2011.",
+      "beleg": "src/gallium/drivers/nouveau/nv50/nv50_3d.xml.h:517 und :523 (https://raw.githubusercontent.com/geezhu/mesa/master/src/gallium/drivers/nouveau/nv50/nv50_3d.xml.h)",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(a) Wie ist PAGE_NOT_PRESENT auf nv50 architektonisch zu lesen, ist der Engine-Trap dasselbe wie der VM-Fault?",
+      "antwort": "Marcin Koscielnicki hat das 2011 auf der Liste erklaert: auf nv50 loest ein MMU-Fault keinen eigenen Interrupt aus. Die Faultregister ab 0x100c90 werden gefuellt, und der Fault wird der anfordernden Engine gemeldet, die daraufhin einen enginespezifischen Trap wirft (VFETCH FAULT, CCACHE FAULT, TPROP). nouveau meldet beides getrennt und nutzt den Engine-Trap nur als Anlass, nach neuen VM-Faults zu schauen. Ein Engine-Trap ohne passenden VM-Fault und umgekehrt sind daher normal.",
+      "beleg": "https://lore.kernel.org/all/1299017175.4061.6.camel@bandersnatch/",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(a) Hatte diese Signatur historisch eine Mesa- oder eine Kernelursache?",
+      "antwort": "2011 war sie kernelseitig. Ben Skeggs stellte fest, dass mehrere TLB-Flushes gleichzeitig laufen konnten, und ergaenzte Sperren. Maarten Maathuis und Lucas Stach berichteten danach Stabilitaet, Lucas explizit 'nouveau seems pretty stable again on my NVA8 after the locking commit'. Fuer die Zuordnung heisst das: die Signatur allein beweist keine Userspace-Schuld, sie beweist nur, dass eine CB-Adresse zum Lesezeitpunkt nicht gemappt war. Wer sie gemappt oder verfrueht entfernt hat, sagt der Trap nicht.",
+      "beleg": "https://lore.kernel.org/all/1299583356.2199.1.camel@workstation/ , https://lore.kernel.org/all/AANLkTimwGyz1d=W_ZdcaBARO0sw=wZ470Cwy+8407s-m@mail.gmail.com/ (Thread s.o.)",
+      "sicherheit": "teilweise belegt"
+    },
+    {
+      "frage": "(b) Gibt es Berichte, dass nv50/Tesla unter Chrome oder Chromium-Ablegern haengt?",
+      "antwort": "Ja, mehrfach und aktuell. drm/nouveau#481 vom 14.04.2026: GTX 285 (GT200, nv50-Familie), Chromium mit Hardwarebeschleunigung, beim Aufruf von Google Maps zu 100 Prozent reproduzierbarer harter Systemfreeze, PGRAPH TRAP_TEXTURE und TRAP_PROP ueber alle TPs, PAGE_NOT_PRESENT, und der Berichtende schreibt ausdruecklich 'the Nouveau kernel driver fails to recover, resulting in a total OS lockup'. Spaeter engte er es auf einen konkreten Shadertoy-Shader ein: mit AA=1 kein Freeze, mit AA=2 oder 3 Freeze. drm/nouveau#347: 'system crashes when opening brave'. drm/nouveau#484: G96, Brave und WebKit-Anwendungen, 'No freeze when disabling acceleration'. Die Reports sind alle offen, ohne Entwicklerantwort.",
+      "beleg": "https://gitlab.freedesktop.org/drm/nouveau/-/issues/481 , https://gitlab.freedesktop.org/drm/nouveau/-/issues/347 , https://gitlab.freedesktop.org/drm/nouveau/-/issues/484",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(b) Ist Chrome der einzige Ausloeser, oder trifft es beliebige GL-Last?",
+      "antwort": "Es trifft beliebige GL-Last. Dieselbe Trap-und-Freeze-Klasse auf Tesla wird ohne jeden Browser gemeldet: drm/nouveau#480 (GT216/NVA5, TRAP_TEXTURE plus 'fb: trapped read ... client 0a [TEXTURE] ... PAGE_NOT_PRESENT' ausgeloest von plasma-systemmonitor, Glitches und Freeze), mesa#12162 (NVAC, kompletter Systemfreeze beim Spulen in VLC, als Mesa-Regression 24.2.4 nach 24.2.7 beschrieben), mesa#14838 (Tesla GT216, Fehldarstellung seit Mesa 25.2.8). Chrome ist damit der schwerste und regelmaessigste Verbraucher, nicht die notwendige Bedingung.",
+      "beleg": "https://gitlab.freedesktop.org/drm/nouveau/-/issues/480 , https://gitlab.freedesktop.org/mesa/mesa/-/issues/12162 , https://gitlab.freedesktop.org/mesa/mesa/-/issues/14838",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(a) Gibt es einen unabhaengigen Bericht auf genau dieser Hardware (NVAC)?",
+      "antwort": "Ja. mesa#15640 vom 11.06.2026 meldet auf einem iMac 9,1 mit C79/GeForce 9400 (NVAC, Tesla) TRAP_PROP mit SURF_HEIGHT_OVERRUN, 'trapped read ... PAGE_NOT_PRESENT' und CACHE_ERROR. Bemerkenswert fuer die Zuordnung ist die Beobachtung des Melders: 'These happened with mesa 26.0.8 and when I reverted back to 25.0.7 I couldn't see these.' Gleicher Kernel, gleiche Hardware, unterschiedliche Mesa-Version, unterschiedliches Fehlerbild. Aeltere NVAC-Faelle in derselben Richtung: mesa#8863 ('NV50 (NVAC) broken in latest master', 2023) und mesa#12162.",
+      "beleg": "https://gitlab.freedesktop.org/mesa/mesa/-/issues/15640 , https://gitlab.freedesktop.org/mesa/mesa/-/issues/8863",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(c) Wird nv50 im Kernel (nouveau) noch gepflegt?",
+      "antwort": "Formal ja, faktisch nein. MAINTAINERS fuehrt nouveau als 'Supported' mit Lyude Paul und Danilo Krummrich. Die Datei nvkm/engine/gr/nv50.c hat seit 2016-12-21 (0233a9f40, 'add defines for gr classes') keine inhaltliche Aenderung mehr bekommen, danach nur Umbauten (864d37c3d 2020, c358f5387 2023) und treeweite Allokator-Umstellungen (69050f8d6, bf4afc53b, Februar 2026). Von rund 300 Commits unter drivers/gpu/drm/nouveau seit dem 01.01.2025 betrifft genau einer pre-Fermi-Hardware ('drm/nouveau/nvif: fix null ptr deref on pre-fermi boards', 2025-07-14), waehrend etwa ein Drittel GSP-Themen der neuen Generationen behandelt.",
+      "beleg": "MAINTAINERS:8281-8293 (c21bb4193868, /home/neo/linux-nouveau-patches); GitHub-API repos/torvalds/linux/commits?path=drivers/gpu/drm/nouveau/nvkm/engine/gr/nv50.c und path=drivers/gpu/drm/nouveau&since=2025-01-01",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(c) Gibt es upstream ueberhaupt einen Erholungspfad fuer Tesla-Kanalfehler?",
+      "antwort": "Nein. nvkm_chan_error() ist in fifo/chan.c:227 definiert und wird ausschliesslich aus gf100.c:343 (Fermi), gv100.c:158, ga100.c:205/244, runl.c:80 (Runlist-Timeout) und dem GSP-Pfad r535/fifo.c:356 aufgerufen. In fifo/nv50.c, fifo/g84.c und gr/nv50.c kommt es kein einziges Mal vor. nv50_gr_intr (gr/nv50.c:620-675) liest den Trap aus, protokolliert ihn, quittiert ueber 0x400100, schreibt 0x400500 wieder scharf und gibt den Kanal per nvkm_chan_put frei. Kein Kill, kein Reset, keine Fence-Benachrichtigung. Der einzige Upstream-Vorstoss in diese Richtung in 2025/2026 ist die Serie des Melders selbst ('drm/nouveau/fifo: add recovery path for Tesla cache_error/dma_pusher', 06.08.2026).",
+      "beleg": "drivers/gpu/drm/nouveau/nvkm/engine/fifo/chan.c:227 und nvkm/engine/gr/nv50.c:620-675 (c21bb4193868); https://lore.kernel.org/all/20260806085228.1848994-4-mczernohous@gmail.com/",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(c) Wird nv50 in Mesa noch gepflegt?",
+      "antwort": "Palliativ. Der Treiber lebt und bekommt gelegentlich echte Korrekturen, etwa a6992c7bb vom 03.01.2026 ('nv50,nvc0: Avoid uninitialized cbuf reads in blits', reviewed by Karol Herbst, Closes mesa#14082). Von 61 Commits unter src/gallium/drivers/nouveau/nv50 in 24 Monaten sind aber fast alle treeweite Umbenennungen und Gallium-API-Umbauten. Dieselben Umbauten sind zugleich Fehlerquelle: der genannte Fix traegt 'Fixes: 2eb45daa9c8 (gallium: de-pointerize pipe_surface)', und mesa#16100 vom 15.08.2026 haelt fest, dass nv30/nv50/nvc0 pipe_surface weiterhin falsch verwenden. Am 30.04.2026 hat Mike Blumenkrantz in mesa#15365 ('Time for amber2?') vorgeschlagen, unter anderem nv30 und nv50 ganz aus dem Mesa-Hauptbaum zu loesen; Karol Herbst wuerde nvc0 mitnehmen, Erik Faye-Lund schreibt 'If we want to delete i915g, nv30, nv50 and maybe svga that'd be fine by me'. Entschieden ist nichts, die Diskussion ist offen.",
+      "beleg": "https://gitlab.freedesktop.org/mesa/mesa/-/commit/a6992c7bb , https://gitlab.freedesktop.org/mesa/mesa/-/issues/16100 , https://gitlab.freedesktop.org/mesa/mesa/-/issues/15365",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(d) Welche Umgehung benutzen andere Betroffene?",
+      "antwort": "Erstens Beschleunigung im Browser abschalten, genau wie hier: drm/nouveau#484 formuliert es als 'No freeze when disabling acceleration. But too much cpu load.' Zweitens Software-Rendering erzwingen, MESA_LOADER_DRIVER_OVERRIDE=llvmpipe (mesa#14838) oder LIBGL_ALWAYS_SOFTWARE. Drittens Mesa zurueckrollen (mesa#15640: 25.0.7 statt 26.0.8). Viertens die Last verkleinern, in drm/nouveau#481 verschwindet der Freeze mit AA=1 im Shader. Fuenftens auf Kernelseite der Modulparameter nouveau.noaccel=1, der die Beschleunigung komplett abschaltet. Was niemand berichtet, ist eine Umgehung, die den Haenger nach Eintritt heilt.",
+      "beleg": "https://gitlab.freedesktop.org/drm/nouveau/-/issues/484 , https://gitlab.freedesktop.org/mesa/mesa/-/issues/14838 , https://gitlab.freedesktop.org/drm/nouveau/-/issues/481 ; drivers/gpu/drm/nouveau/nouveau_drm.c:97-99 (c21bb4193868)",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "(d) Hat Chromium selbst eine Schutzvorrichtung gegen nouveau, und greift sie noch?",
+      "antwort": "Chromium hat sie, aber sie kann bei heutigem Mesa nicht mehr treffen. In gpu/config/software_rendering_list.json steht Eintrag id 30, 'NVIDIA cards with nouveau drivers in Linux are unstable', cr_bugs 94103 und 876523, vendor_id 0x10de, features 'all', also alle GPU-Funktionen aus. Der Treffer haengt aber an gl_vendor '(?i)nouveau.*'. Chromium fuellt gl_vendor aus glGetString(GL_VENDOR) (gpu_info_collector.cc:607-608) beziehungsweise aus dem entpackten ANGLE-Renderer-String (gpu_control_list.cc:282-291). Mesa liefert fuer nouveau seit Commit 9c1fbc076afe (Daniel Stone, 10.01.2023, 'Return Mesa for GL_VENDOR for community drivers') aber 'Mesa' statt 'nouveau' (nouveau_screen.c:53-56). Der Riegel, den Chrome 71 seinerzeit eingezogen hat, passt seither nicht mehr auf den String, und der GPU-Prozess laeuft an. Dass er hier tatsaechlich lief, zeigt der Kanalbesitzer 'chrome[PID]' im Fehlerprotokoll.",
+      "beleg": "https://chromium.googlesource.com/chromium/src/+/refs/heads/main/gpu/config/software_rendering_list.json (Eintrag id 30); gpu/config/gpu_info_collector.cc:607-608; gpu/config/gpu_control_list.cc:282-291; https://gitlab.freedesktop.org/mesa/mesa/-/commit/9c1fbc076afe5a4a7a6f534cb62bf83d3d207efc ; https://www.phoronix.com/news/Chrome-Blacklisting-Nouveau",
+      "sicherheit": "teilweise belegt"
+    },
+    {
+      "frage": "(d) Wie halten es andere Browser?",
+      "antwort": "Firefox unterscheidet nouveau bis heute als eigenen Treiberhersteller (DriverVendor::MesaNouveau) und sperrt fuer ihn FEATURE_THREADSAFE_GL bedingungslos, ohne Versionsvergleich, mit dem Grund 'FEATURE_FAILURE_THREADSAFE_GL_NOUVEAU'. Dazu kommt eine Mindestversion Mesa 11.0 fuer nouveau. Mozilla traut dem Stapel also ebenfalls nicht, hat seine Erkennung aber nicht an GL_VENDOR aufgehaengt und ist deshalb nicht ins Leere gelaufen.",
+      "beleg": "widget/gtk/GfxInfo.cpp:1165-1170 und :867-872 (https://raw.githubusercontent.com/mozilla/gecko-dev/master/widget/gtk/GfxInfo.cpp)",
+      "sicherheit": "belegt"
+    },
+    {
+      "frage": "Was folgt daraus fuer die Aufteilung der Anteile?",
+      "antwort": "Zwei Haelften, verschiedene Adressaten. Die zweite Haelfte, aus dem Trap wird ein dauerhaft stehender PGRAPH und ein nie signalisierender Fence, ist eindeutig nouveau und upstream unbestritten unbearbeitet: kein nvkm_chan_error auf Tesla, drei offene Tesla-Freeze-Tickets ohne Entwicklerantwort, keine pre-Fermi-Arbeit seit Jahren. Die erste Haelfte, der Fault selbst, zeigt upstream klar in Richtung Mesa nv50, weil dieselbe Hardware bei anderer Mesa-Version ein anderes Fehlerbild hat (mesa#15640), weil Freezes als Mesa-Regressionen datierbar sind (mesa#12162, mesa#14838) und weil die Kernumbauten in Gallium den Treiber nachweislich beschaedigt haben (mesa#14082, mesa#16100). Beweisend ist das nicht: 2011 hatte genau diese Signatur eine kernelseitige VM-Ursache, und ein Trap sagt nicht, wer die Seite entfernt hat. Chromiums Anteil ist real, aber klein und benennbar: es ist der schwerste GL-Verbraucher, und sein eigener, seit 2018 vorhandener Riegel gegen nouveau greift seit dem Mesa-Rename von 2023 nicht mehr.",
+      "beleg": "Zusammenfuehrung der obigen Belege; insbesondere nvkm/engine/gr/nv50.c:620-675, https://gitlab.freedesktop.org/mesa/mesa/-/issues/15640 , https://gitlab.freedesktop.org/drm/nouveau/-/issues/481",
+      "sicherheit": "teilweise belegt"
+    }
+  ],
+  "fazit": "Aus der Sicht ausserhalb dieser Maschine ist der Fall kein Einzelfall, sondern eine seit 2011 dokumentierte und bis heute offene Tesla-Klasse: derselbe Trap, dieselbe Klasse 0x83xx, dieselbe Methode 0x0f04 des Konstantenpuffer-Pfads, dasselbe anschliessende 'failed to idle channel'. Aufteilen laesst sich der Anteil sauber: die Nichterholung gehoert nouveau, dort gibt es fuer Tesla schlicht keinen Fehlerpfad, nvkm_chan_error existiert erst ab Fermi, und die drei aktuellen Tesla-Freeze-Tickets im nouveau-Tracker sind unbeantwortet. Der ausloesende Fault zeigt upstream auf Mesas nv50-Treiber, der von der schnellen Gallium-Kernentwicklung wiederholt beschaedigt wurde und dessen Ausgliederung Mesa-Entwickler seit April 2026 offen diskutieren, beweisen laesst sich das aus der Signatur allein aber nicht, denn 2011 lag die Ursache derselben Meldung im Kernel-VM. Chromium traegt einen kleinen, klar benennbaren Anteil: es ist die schwerste GL-Last, und seine eigene Sperre gegen nouveau haengt an GL_VENDOR 'nouveau', das Mesa seit Januar 2023 nicht mehr ausgibt, weshalb der Schutz stillschweigend wirkungslos geworden ist.",
+  "zuordnung": "geteilt"
+}
