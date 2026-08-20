@@ -1,0 +1,91 @@
+This is mostly a leftover artifact from the pre-atomic days, and while
+we've been using it for a while now - it isn't great. Mostly because having
+redundant state tracking for things atomic already keeps track of is pretty
+much always error prone, as anyone working on nouveau who isn't already
+very well versed in atomic modesetting isn't going to realize this isn't
+the right way to see what CRTC is assigned to an encoder.
+
+Now that we've removed the only legitimate user (DRM audio) and all the
+illegitimate ones, let's obliterate it.
+
+Signed-off-by: Lyude Paul <lyude@redhat.com>
+---
+ drivers/gpu/drm/nouveau/dispnv50/disp.c   | 8 --------
+ drivers/gpu/drm/nouveau/nouveau_encoder.h | 3 ---
+ 2 files changed, 11 deletions(-)
+
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+index fbb874b11d7a8..1882ab3176a49 100644
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+@@ -502,7 +502,6 @@ nv50_dac_atomic_disable(struct drm_encoder *encoder, struct drm_atomic_commit *s
+ 	const u32 ctrl = NVDEF(NV507D, DAC_SET_CONTROL, OWNER, NONE);
+ 
+ 	core->func->dac->ctrl(core, nv_encoder->outp.or.id, ctrl, NULL);
+-	nv_encoder->crtc = NULL;
+ }
+ 
+ static void
+@@ -532,8 +531,6 @@ nv50_dac_atomic_enable(struct drm_encoder *encoder, struct drm_atomic_commit *st
+ 
+ 	core->func->dac->ctrl(core, nv_encoder->outp.or.id, ctrl, asyh);
+ 	asyh->or.depth = 0;
+-
+-	nv_encoder->crtc = &nv_crtc->base;
+ }
+ 
+ static enum drm_connector_status
+@@ -1634,7 +1631,6 @@ nv50_sor_atomic_disable(struct drm_encoder *encoder, struct drm_atomic_commit *s
+ 
+ 	nv_encoder->update(nv_encoder, head->base.index, NULL, 0, 0);
+ 	nv50_audio_disable(encoder, &head->base);
+-	nv_encoder->crtc = NULL;
+ }
+ 
+ // common/inc/displayport/displayport.h
+@@ -1802,7 +1798,6 @@ nv50_sor_atomic_enable(struct drm_encoder *encoder, struct drm_atomic_commit *st
+ 	u8 depth = NV837D_SOR_SET_CONTROL_PIXEL_DEPTH_DEFAULT;
+ 
+ 	nv_connector = nv50_outp_get_new_connector(state, nv_encoder);
+-	nv_encoder->crtc = &nv_crtc->base;
+ 
+ 	if ((disp->disp->object.oclass == GT214_DISP ||
+ 	     disp->disp->object.oclass >= GF110_DISP) &&
+@@ -2013,7 +2008,6 @@ nv50_pior_atomic_disable(struct drm_encoder *encoder, struct drm_atomic_commit *
+ 	const u32 ctrl = NVDEF(NV507D, PIOR_SET_CONTROL, OWNER, NONE);
+ 
+ 	core->func->pior->ctrl(core, nv_encoder->outp.or.id, ctrl, NULL);
+-	nv_encoder->crtc = NULL;
+ }
+ 
+ static void
+@@ -2058,7 +2052,6 @@ nv50_pior_atomic_enable(struct drm_encoder *encoder, struct drm_atomic_commit *s
+ 	}
+ 
+ 	core->func->pior->ctrl(core, nv_encoder->outp.or.id, ctrl, asyh);
+-	nv_encoder->crtc = &nv_crtc->base;
+ }
+ 
+ static const struct drm_encoder_helper_funcs
+@@ -2794,7 +2787,6 @@ nv50_display_read_hw_or_state(struct drm_device *dev, struct nv50_disp *disp,
+ 	armh->state.enable = true;
+ 	pm_runtime_get_noresume(dev->dev);
+ 
+-	outp->crtc = crtc;
+ 	outp->ctrl = NVVAL(NV507D, SOR_SET_CONTROL, PROTOCOL, proto) | BIT(crtc->index);
+ 
+ 	drm_connector_get(conn);
+diff --git a/drivers/gpu/drm/nouveau/nouveau_encoder.h b/drivers/gpu/drm/nouveau/nouveau_encoder.h
+index 647322ac1c8df..6dcdfd048a35d 100644
+--- a/drivers/gpu/drm/nouveau/nouveau_encoder.h
++++ b/drivers/gpu/drm/nouveau/nouveau_encoder.h
+@@ -54,9 +54,6 @@ struct nouveau_encoder {
+ 
+ 	struct i2c_adapter *i2c;
+ 
+-	/* different to drm_encoder.crtc, this reflects what's
+-	 * actually programmed on the hw, not the proposed crtc */
+-	struct drm_crtc *crtc;
+ 	u32 ctrl;
+ 
+ 	/* Protected by nouveau_drm.audio.lock */

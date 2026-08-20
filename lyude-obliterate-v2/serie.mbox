@@ -1,0 +1,518 @@
+From patchwork Wed Aug 19 15:43:48 2026
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Subject: [PATCH v2 0/6] Obliterate nouveau_encoder->crtc
+From: Lyude Paul <lyude@redhat.com>
+Message-Id: <20260819155934.154125-1-lyude@redhat.com>
+To: dri-devel@lists.freedesktop.org,
+	nouveau@lists.freedesktop.org,
+	linux-kernel@vger.kernel.org,
+	Marek Czernohous <mczernohous@gmail.com>
+Cc: Dave Airlie <airlied@redhat.com>, Marek Czernohous <marek@czernohous.de>,
+ Maarten Lankhorst <maarten.lankhorst@linux.intel.com>,
+ Luca Ceresoli <luca.ceresoli@bootlin.com>,
+ Marco Crivellari <marco.crivellari@suse.com>, Kees Cook <kees@kernel.org>,
+ Simona Vetter <simona@ffwll.ch>, Ben Skeggs <bskeggs@redhat.com>,
+ Maxime Ripard <mripard@kernel.org>, Danilo Krummrich <dakr@kernel.org>,
+ Jani Nikula <jani.nikula@intel.com>
+Date: Wed, 19 Aug 2026 11:43:47 -0400
+
+This is mostly a leftover artifact from the pre-atomic days, and while
+we've been using it for a while now - it isn't great. Mostly because having
+redundant state tracking for things atomic already keeps track of is pretty
+much always error prone, as anyone working on nouveau who isn't already
+very well versed in atomic modesetting isn't going to realize this isn't
+the right way to see what CRTC is assigned to an encoder.
+
+Also - this patch series does fix an actual bug (patches 1-3).
+
+Previous version of this patch series:
+
+	https://patchwork.freedesktop.org/series/172417/
+
+Lyude Paul (6):
+  drm/nouveau/kms/nv50-: Move DPCD backlight disable into its own
+    function
+  drm/nouveau/kms/nv50-: Add nv50_outp_get_old_crtc()
+  drm/nouveau/kms/nv50-: Stop using nv_encoder->crtc in
+    nv50_sor_atomic_disable()
+  drm/nouveau/kms/nv50-: Stop using nv_encoder->crtc in
+    nv50_disp_atomic_commit_core()
+  drm/nouveau/kms/nv50-: Add nouveau_encoder->audio.crtc
+  drm/nouveau/kms/nv50-: Obliterate nouveau_encoder->crtc
+
+ drivers/gpu/drm/nouveau/dispnv50/disp.c   | 78 ++++++++++++++++-------
+ drivers/gpu/drm/nouveau/nouveau_encoder.h |  4 +-
+ 2 files changed, 56 insertions(+), 26 deletions(-)
+
+
+base-commit: 0e118b936dc5904cf0d9859882a40c96057b083d
+-- 
+2.55.0
+
+
+
+From patchwork Wed Aug 19 15:43:48 2026
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 8bit
+Subject: [v2,1/6] drm/nouveau/kms/nv50-: Move DPCD backlight disable into its
+ own function
+From: Lyude Paul <lyude@redhat.com>
+X-Patchwork-Id: 747354
+Message-Id: <20260819155934.154125-2-lyude@redhat.com>
+To: dri-devel@lists.freedesktop.org,
+	nouveau@lists.freedesktop.org,
+	linux-kernel@vger.kernel.org,
+	Marek Czernohous <mczernohous@gmail.com>
+Cc: stable@vger.kernel.org, Faith Ekstrand <faith.ekstrand@collabora.com>,
+ Dave Airlie <airlied@redhat.com>, Marek Czernohous <marek@czernohous.de>,
+ Maarten Lankhorst <maarten.lankhorst@linux.intel.com>,
+ Marco Crivellari <marco.crivellari@suse.com>, Kees Cook <kees@kernel.org>,
+ Simona Vetter <simona@ffwll.ch>, Ben Skeggs <bskeggs@redhat.com>,
+ Maxime Ripard <mripard@kernel.org>, Danilo Krummrich <dakr@kernel.org>,
+ Jani Nikula <jani.nikula@intel.com>
+Date: Wed, 19 Aug 2026 11:43:48 -0400
+
+Besides using state->dev to access the nouveau_drm device again, there
+should be no functional changes here.
+
+Fixes: f575f2bdb6c3 ("drm/nouveau/kms/nv50-: Remove (nv_encoder->crtc) checks in ->disable callbacks")
+Cc: <stable@vger.kernel.org> # v5.12+
+Signed-off-by: Lyude Paul <lyude@redhat.com>
+---
+ drivers/gpu/drm/nouveau/dispnv50/disp.c | 39 +++++++++++++++++--------
+ 1 file changed, 27 insertions(+), 12 deletions(-)
+
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+index 2c66e480b5116..a885394f7cb92 100644
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+@@ -1561,24 +1561,39 @@ nv50_sor_update(struct nouveau_encoder *nv_encoder, u8 head,
+  * the panel backlight has been shut off? Intel doesn't seem to do this, and uses a
+  * fixed time delay from the vbios…
+  */
++#ifdef CONFIG_DRM_NOUVEAU_BACKLIGHT
++static inline void
++nv50_sor_atomic_disable_backlight(struct nouveau_drm *drm,
++				  struct nouveau_encoder *nv_encoder,
++				  struct drm_atomic_commit *state)
++{
++	struct nouveau_connector *nv_connector;
++	struct nouveau_backlight *backlight;
++	int ret;
++
++	nv_connector = nv50_outp_get_old_connector(state, nv_encoder);
++	if (drm_WARN_ON(drm->dev, !nv_connector))
++		return;
++	backlight = nv_connector->backlight;
++
++	if (!backlight || !backlight->uses_dpcd)
++		return;
++
++	ret = drm_edp_backlight_disable(&nv_connector->aux, &backlight->edp_info);
++	if (ret < 0)
++		NV_ERROR(drm, "Failed to disable backlight on [CONNECTOR:%d:%s]: %d\n",
++			 nv_connector->base.base.id, nv_connector->base.name, ret);
++}
++#endif
++
+ static void
+ nv50_sor_atomic_disable(struct drm_encoder *encoder, struct drm_atomic_commit *state)
+ {
+ 	struct nouveau_encoder *nv_encoder = nouveau_encoder(encoder);
+ 	struct nv50_head *head = nv50_head(nv_encoder->crtc);
+-#ifdef CONFIG_DRM_NOUVEAU_BACKLIGHT
+-	struct nouveau_connector *nv_connector = nv50_outp_get_old_connector(state, nv_encoder);
+-	struct nouveau_drm *drm = nouveau_drm(nv_encoder->base.base.dev);
+-	struct nouveau_backlight *backlight = nv_connector->backlight;
+-	struct drm_dp_aux *aux = &nv_connector->aux;
+-	int ret;
+ 
+-	if (backlight && backlight->uses_dpcd) {
+-		ret = drm_edp_backlight_disable(aux, &backlight->edp_info);
+-		if (ret < 0)
+-			NV_ERROR(drm, "Failed to disable backlight on [CONNECTOR:%d:%s]: %d\n",
+-				 nv_connector->base.base.id, nv_connector->base.name, ret);
+-	}
++#ifdef CONFIG_DRM_NOUVEAU_BACKLIGHT
++	nv50_sor_atomic_disable_backlight(nouveau_drm(state->dev), nv_encoder, state);
+ #endif
+ 
+ 	if (nv_encoder->dcb->type == DCB_OUTPUT_TMDS && nv_encoder->hdmi.enabled) {
+
+From patchwork Wed Aug 19 15:43:49 2026
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Subject: [v2,2/6] drm/nouveau/kms/nv50-: Add nv50_outp_get_old_crtc()
+From: Lyude Paul <lyude@redhat.com>
+X-Patchwork-Id: 747356
+Message-Id: <20260819155934.154125-3-lyude@redhat.com>
+To: dri-devel@lists.freedesktop.org,
+	nouveau@lists.freedesktop.org,
+	linux-kernel@vger.kernel.org,
+	Marek Czernohous <mczernohous@gmail.com>
+Cc: stable@vger.kernel.org, Dave Airlie <airlied@redhat.com>,
+ Marek Czernohous <marek@czernohous.de>,
+ Maarten Lankhorst <maarten.lankhorst@linux.intel.com>,
+ Luca Ceresoli <luca.ceresoli@bootlin.com>,
+ Marco Crivellari <marco.crivellari@suse.com>, Kees Cook <kees@kernel.org>,
+ Simona Vetter <simona@ffwll.ch>, Ben Skeggs <bskeggs@redhat.com>,
+ Maxime Ripard <mripard@kernel.org>, Danilo Krummrich <dakr@kernel.org>,
+ Jani Nikula <jani.nikula@intel.com>
+Date: Wed, 19 Aug 2026 11:43:49 -0400
+
+Does what it says on the label, unused for now.
+
+Signed-off-by: Lyude Paul <lyude@redhat.com>
+Fixes: f575f2bdb6c3 ("drm/nouveau/kms/nv50-: Remove (nv_encoder->crtc) checks in ->disable callbacks")
+Cc: <stable@vger.kernel.org> # v5.12+
+---
+ drivers/gpu/drm/nouveau/dispnv50/disp.c | 16 ++++++++++++++++
+ 1 file changed, 16 insertions(+)
+
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+index a885394f7cb92..152361f7feb42 100644
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+@@ -459,6 +459,22 @@ nv50_outp_get_old_connector(struct drm_atomic_commit *state, struct nouveau_enco
+ 	return NULL;
+ }
+ 
++static struct nouveau_crtc * __maybe_unused
++nv50_outp_get_old_crtc(const struct drm_atomic_commit *state, const struct nouveau_encoder *outp)
++{
++	struct drm_crtc *crtc;
++	struct drm_crtc_state *crtc_state;
++	const u32 mask = drm_encoder_mask(&outp->base.base);
++	int i;
++
++	for_each_old_crtc_in_state(state, crtc, crtc_state, i) {
++		if (crtc_state->encoder_mask & mask)
++			return nouveau_crtc(crtc);
++	}
++
++	return NULL;
++}
++
+ static struct nouveau_crtc *
+ nv50_outp_get_new_crtc(const struct drm_atomic_commit *state, const struct nouveau_encoder *outp)
+ {
+
+From patchwork Wed Aug 19 15:43:50 2026
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Subject: [v2,3/6] drm/nouveau/kms/nv50-: Stop using nv_encoder->crtc in
+ nv50_sor_atomic_disable()
+From: Lyude Paul <lyude@redhat.com>
+X-Patchwork-Id: 747358
+Message-Id: <20260819155934.154125-4-lyude@redhat.com>
+To: dri-devel@lists.freedesktop.org,
+	nouveau@lists.freedesktop.org,
+	linux-kernel@vger.kernel.org,
+	Marek Czernohous <mczernohous@gmail.com>
+Cc: stable@vger.kernel.org, Faith Ekstrand <faith.ekstrand@collabora.com>,
+ Dave Airlie <airlied@redhat.com>, Marek Czernohous <marek@czernohous.de>,
+ Maarten Lankhorst <maarten.lankhorst@linux.intel.com>,
+ Luca Ceresoli <luca.ceresoli@bootlin.com>, Kees Cook <kees@kernel.org>,
+ Marco Crivellari <marco.crivellari@suse.com>,
+ Simona Vetter <simona@ffwll.ch>, Ben Skeggs <bskeggs@redhat.com>,
+ Maxime Ripard <mripard@kernel.org>, Danilo Krummrich <dakr@kernel.org>,
+ Jani Nikula <jani.nikula@intel.com>
+Date: Wed, 19 Aug 2026 11:43:50 -0400
+
+This is a leftover CRTC bookkeeping variable from the pre-atomic days.
+While it works in most situations, it's prone to breaking - as pointed out
+by Marek Czernohous.
+
+Signed-off-by: Lyude Paul <lyude@redhat.com>
+Reported-by: Marek Czernohous <mczernohous@gmail.com>
+Fixes: f575f2bdb6c3 ("drm/nouveau/kms/nv50-: Remove (nv_encoder->crtc) checks in ->disable callbacks")
+Cc: <stable@vger.kernel.org> # v5.12+
+---
+ drivers/gpu/drm/nouveau/dispnv50/disp.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+index 152361f7feb42..f19820dc055ae 100644
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+@@ -459,7 +459,7 @@ nv50_outp_get_old_connector(struct drm_atomic_commit *state, struct nouveau_enco
+ 	return NULL;
+ }
+ 
+-static struct nouveau_crtc * __maybe_unused
++static struct nouveau_crtc *
+ nv50_outp_get_old_crtc(const struct drm_atomic_commit *state, const struct nouveau_encoder *outp)
+ {
+ 	struct drm_crtc *crtc;
+@@ -1606,12 +1606,18 @@ static void
+ nv50_sor_atomic_disable(struct drm_encoder *encoder, struct drm_atomic_commit *state)
+ {
+ 	struct nouveau_encoder *nv_encoder = nouveau_encoder(encoder);
+-	struct nv50_head *head = nv50_head(nv_encoder->crtc);
++	struct nouveau_crtc *nv_crtc;
++	struct nv50_head *head;
+ 
+ #ifdef CONFIG_DRM_NOUVEAU_BACKLIGHT
+ 	nv50_sor_atomic_disable_backlight(nouveau_drm(state->dev), nv_encoder, state);
+ #endif
+ 
++	nv_crtc = nv50_outp_get_old_crtc(state, nv_encoder);
++	if (drm_WARN_ON(state->dev, !nv_crtc))
++		return;
++	head = nv50_head(&nv_crtc->base);
++
+ 	if (nv_encoder->dcb->type == DCB_OUTPUT_TMDS && nv_encoder->hdmi.enabled) {
+ 		nvif_outp_hdmi(&nv_encoder->outp, head->base.index,
+ 			       false, 0, 0, 0, false, false, false);
+
+From patchwork Wed Aug 19 15:43:51 2026
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Subject: [v2,4/6] drm/nouveau/kms/nv50-: Stop using nv_encoder->crtc in
+ nv50_disp_atomic_commit_core()
+From: Lyude Paul <lyude@redhat.com>
+X-Patchwork-Id: 747359
+Message-Id: <20260819155934.154125-5-lyude@redhat.com>
+To: dri-devel@lists.freedesktop.org,
+	nouveau@lists.freedesktop.org,
+	linux-kernel@vger.kernel.org,
+	Marek Czernohous <mczernohous@gmail.com>
+Cc: Marek Czernohous <marek@czernohous.de>,
+ Faith Ekstrand <faith.ekstrand@collabora.com>,
+ Dave Airlie <airlied@redhat.com>,
+ Maarten Lankhorst <maarten.lankhorst@linux.intel.com>,
+ Marco Crivellari <marco.crivellari@suse.com>,
+ Luca Ceresoli <luca.ceresoli@bootlin.com>, Kees Cook <kees@kernel.org>,
+ Simona Vetter <simona@ffwll.ch>, Ben Skeggs <bskeggs@redhat.com>,
+ Maxime Ripard <mripard@kernel.org>, Danilo Krummrich <dakr@kernel.org>,
+ Jani Nikula <jani.nikula@intel.com>
+Date: Wed, 19 Aug 2026 11:43:51 -0400
+
+Another leftover spot where we still use nv_encoder->crtc. Get rid of it
+and do the right thing: get the currently assigned CRTC from the new atomic
+state.
+
+Signed-off-by: Lyude Paul <lyude@redhat.com>
+Reported-by: Marek Czernohous <marek@czernohous.de>
+---
+V2:
+* Only grab the new CRTC for an outp if we're enabling it, which guarantees
+  that we have the CRTC's atomic state present in the current atomic
+  commit (also removing the need for a NULL check).
+
+ drivers/gpu/drm/nouveau/dispnv50/disp.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+index f19820dc055ae..d038743d1382a 100644
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+@@ -2173,7 +2173,8 @@ nv50_disp_atomic_commit_core(struct drm_atomic_commit *state, u32 *interlock)
+ 			struct nouveau_encoder *nv_encoder = nouveau_encoder(outp->encoder);
+ 
+ 			if (outp->enabled) {
+-				nv50_audio_enable(outp->encoder, nouveau_crtc(nv_encoder->crtc),
++				nv50_audio_enable(outp->encoder,
++						  nv50_outp_get_new_crtc(state, nv_encoder),
+ 						  nv_encoder->conn, NULL, NULL);
+ 				outp->enabled = outp->disabled = false;
+ 			} else {
+
+From patchwork Wed Aug 19 15:43:52 2026
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Subject: [v2,5/6] drm/nouveau/kms/nv50-: Add nouveau_encoder->audio.crtc
+From: Lyude Paul <lyude@redhat.com>
+X-Patchwork-Id: 747361
+Message-Id: <20260819155934.154125-6-lyude@redhat.com>
+To: dri-devel@lists.freedesktop.org,
+	nouveau@lists.freedesktop.org,
+	linux-kernel@vger.kernel.org,
+	Marek Czernohous <mczernohous@gmail.com>
+Cc: Faith Ekstrand <faith.ekstrand@collabora.com>,
+ Dave Airlie <airlied@redhat.com>, Marek Czernohous <marek@czernohous.de>,
+ Maarten Lankhorst <maarten.lankhorst@linux.intel.com>,
+ Luca Ceresoli <luca.ceresoli@bootlin.com>,
+ Marco Crivellari <marco.crivellari@suse.com>, Kees Cook <kees@kernel.org>,
+ Simona Vetter <simona@ffwll.ch>, Ben Skeggs <bskeggs@redhat.com>,
+ Maxime Ripard <mripard@kernel.org>, Danilo Krummrich <dakr@kernel.org>,
+ Jani Nikula <jani.nikula@intel.com>
+Date: Wed, 19 Aug 2026 11:43:52 -0400
+
+This is the only spot in nouveau where we do actually need to keep track of
+the currently assigned CRTC for an encoder, and it ideally should be
+happening outside of the modesetting locks.
+
+So in preparation for obliterating nouveau_encoder->crtc, let's just add a
+variable into nouveau_encoder->audio for tracking this and use it instead
+of nouveau_encoder->crtc. This makes it a lot more obvious that this is
+only intended for state-tracking for audio.
+
+Signed-off-by: Lyude Paul <lyude@redhat.com>
+---
+ drivers/gpu/drm/nouveau/dispnv50/disp.c   | 4 +++-
+ drivers/gpu/drm/nouveau/nouveau_encoder.h | 1 +
+ 2 files changed, 4 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+index d038743d1382a..fbb874b11d7a8 100644
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+@@ -636,7 +636,7 @@ nv50_audio_component_get_eld(struct device *kdev, int port, int dev_id,
+ 
+ 		nv_encoder = nouveau_encoder(encoder);
+ 		nv_connector = nv_encoder->conn;
+-		nv_crtc = nouveau_crtc(nv_encoder->crtc);
++		nv_crtc = nv_encoder->audio.crtc;
+ 
+ 		if (!nv_crtc || nv_encoder->outp.or.id != port || nv_crtc->index != dev_id)
+ 			continue;
+@@ -757,6 +757,7 @@ nv50_audio_disable(struct drm_encoder *encoder, struct nouveau_crtc *nv_crtc)
+ 	mutex_lock(&drm->audio.lock);
+ 	if (nv_encoder->audio.enabled) {
+ 		nv_encoder->audio.enabled = false;
++		nv_encoder->audio.crtc = NULL;
+ 		nvif_outp_hda_eld(&nv_encoder->outp, nv_crtc->index, NULL, 0);
+ 	}
+ 	mutex_unlock(&drm->audio.lock);
+@@ -781,6 +782,7 @@ nv50_audio_enable(struct drm_encoder *encoder, struct nouveau_crtc *nv_crtc,
+ 	nvif_outp_hda_eld(&nv_encoder->outp, nv_crtc->index, nv_connector->base.eld,
+ 			  drm_eld_size(nv_connector->base.eld));
+ 	nv_encoder->audio.enabled = true;
++	nv_encoder->audio.crtc = nv_crtc;
+ 
+ 	mutex_unlock(&drm->audio.lock);
+ 
+diff --git a/drivers/gpu/drm/nouveau/nouveau_encoder.h b/drivers/gpu/drm/nouveau/nouveau_encoder.h
+index 4422c6185d498..647322ac1c8df 100644
+--- a/drivers/gpu/drm/nouveau/nouveau_encoder.h
++++ b/drivers/gpu/drm/nouveau/nouveau_encoder.h
+@@ -62,6 +62,7 @@ struct nouveau_encoder {
+ 	/* Protected by nouveau_drm.audio.lock */
+ 	struct {
+ 		bool enabled;
++		struct nouveau_crtc *crtc;
+ 	} audio;
+ 
+ 	struct drm_display_mode mode;
+
+From patchwork Wed Aug 19 15:43:53 2026
+Content-Type: text/plain; charset="utf-8"
+MIME-Version: 1.0
+Content-Transfer-Encoding: 7bit
+Subject: [v2,6/6] drm/nouveau/kms/nv50-: Obliterate nouveau_encoder->crtc
+From: Lyude Paul <lyude@redhat.com>
+X-Patchwork-Id: 747364
+Message-Id: <20260819155934.154125-7-lyude@redhat.com>
+To: dri-devel@lists.freedesktop.org,
+	nouveau@lists.freedesktop.org,
+	linux-kernel@vger.kernel.org,
+	Marek Czernohous <mczernohous@gmail.com>
+Cc: Faith Ekstrand <faith.ekstrand@collabora.com>,
+ Dave Airlie <airlied@redhat.com>, Marek Czernohous <marek@czernohous.de>,
+ Maarten Lankhorst <maarten.lankhorst@linux.intel.com>,
+ Luca Ceresoli <luca.ceresoli@bootlin.com>,
+ Marco Crivellari <marco.crivellari@suse.com>, Kees Cook <kees@kernel.org>,
+ Simona Vetter <simona@ffwll.ch>, Ben Skeggs <bskeggs@redhat.com>,
+ Maxime Ripard <mripard@kernel.org>, Danilo Krummrich <dakr@kernel.org>,
+ Jani Nikula <jani.nikula@intel.com>
+Date: Wed, 19 Aug 2026 11:43:53 -0400
+
+This is mostly a leftover artifact from the pre-atomic days, and while
+we've been using it for a while now - it isn't great. Mostly because having
+redundant state tracking for things atomic already keeps track of is pretty
+much always error prone, as anyone working on nouveau who isn't already
+very well versed in atomic modesetting isn't going to realize this isn't
+the right way to see what CRTC is assigned to an encoder.
+
+Now that we've removed the only legitimate user (DRM audio) and all the
+illegitimate ones, let's obliterate it.
+
+Signed-off-by: Lyude Paul <lyude@redhat.com>
+---
+ drivers/gpu/drm/nouveau/dispnv50/disp.c   | 8 --------
+ drivers/gpu/drm/nouveau/nouveau_encoder.h | 3 ---
+ 2 files changed, 11 deletions(-)
+
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+index fbb874b11d7a8..1882ab3176a49 100644
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+@@ -502,7 +502,6 @@ nv50_dac_atomic_disable(struct drm_encoder *encoder, struct drm_atomic_commit *s
+ 	const u32 ctrl = NVDEF(NV507D, DAC_SET_CONTROL, OWNER, NONE);
+ 
+ 	core->func->dac->ctrl(core, nv_encoder->outp.or.id, ctrl, NULL);
+-	nv_encoder->crtc = NULL;
+ }
+ 
+ static void
+@@ -532,8 +531,6 @@ nv50_dac_atomic_enable(struct drm_encoder *encoder, struct drm_atomic_commit *st
+ 
+ 	core->func->dac->ctrl(core, nv_encoder->outp.or.id, ctrl, asyh);
+ 	asyh->or.depth = 0;
+-
+-	nv_encoder->crtc = &nv_crtc->base;
+ }
+ 
+ static enum drm_connector_status
+@@ -1634,7 +1631,6 @@ nv50_sor_atomic_disable(struct drm_encoder *encoder, struct drm_atomic_commit *s
+ 
+ 	nv_encoder->update(nv_encoder, head->base.index, NULL, 0, 0);
+ 	nv50_audio_disable(encoder, &head->base);
+-	nv_encoder->crtc = NULL;
+ }
+ 
+ // common/inc/displayport/displayport.h
+@@ -1802,7 +1798,6 @@ nv50_sor_atomic_enable(struct drm_encoder *encoder, struct drm_atomic_commit *st
+ 	u8 depth = NV837D_SOR_SET_CONTROL_PIXEL_DEPTH_DEFAULT;
+ 
+ 	nv_connector = nv50_outp_get_new_connector(state, nv_encoder);
+-	nv_encoder->crtc = &nv_crtc->base;
+ 
+ 	if ((disp->disp->object.oclass == GT214_DISP ||
+ 	     disp->disp->object.oclass >= GF110_DISP) &&
+@@ -2013,7 +2008,6 @@ nv50_pior_atomic_disable(struct drm_encoder *encoder, struct drm_atomic_commit *
+ 	const u32 ctrl = NVDEF(NV507D, PIOR_SET_CONTROL, OWNER, NONE);
+ 
+ 	core->func->pior->ctrl(core, nv_encoder->outp.or.id, ctrl, NULL);
+-	nv_encoder->crtc = NULL;
+ }
+ 
+ static void
+@@ -2058,7 +2052,6 @@ nv50_pior_atomic_enable(struct drm_encoder *encoder, struct drm_atomic_commit *s
+ 	}
+ 
+ 	core->func->pior->ctrl(core, nv_encoder->outp.or.id, ctrl, asyh);
+-	nv_encoder->crtc = &nv_crtc->base;
+ }
+ 
+ static const struct drm_encoder_helper_funcs
+@@ -2794,7 +2787,6 @@ nv50_display_read_hw_or_state(struct drm_device *dev, struct nv50_disp *disp,
+ 	armh->state.enable = true;
+ 	pm_runtime_get_noresume(dev->dev);
+ 
+-	outp->crtc = crtc;
+ 	outp->ctrl = NVVAL(NV507D, SOR_SET_CONTROL, PROTOCOL, proto) | BIT(crtc->index);
+ 
+ 	drm_connector_get(conn);
+diff --git a/drivers/gpu/drm/nouveau/nouveau_encoder.h b/drivers/gpu/drm/nouveau/nouveau_encoder.h
+index 647322ac1c8df..6dcdfd048a35d 100644
+--- a/drivers/gpu/drm/nouveau/nouveau_encoder.h
++++ b/drivers/gpu/drm/nouveau/nouveau_encoder.h
+@@ -54,9 +54,6 @@ struct nouveau_encoder {
+ 
+ 	struct i2c_adapter *i2c;
+ 
+-	/* different to drm_encoder.crtc, this reflects what's
+-	 * actually programmed on the hw, not the proposed crtc */
+-	struct drm_crtc *crtc;
+ 	u32 ctrl;
+ 
+ 	/* Protected by nouveau_drm.audio.lock */

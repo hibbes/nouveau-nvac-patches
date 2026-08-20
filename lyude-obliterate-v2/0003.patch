@@ -1,0 +1,45 @@
+This is a leftover CRTC bookkeeping variable from the pre-atomic days.
+While it works in most situations, it's prone to breaking - as pointed out
+by Marek Czernohous.
+
+Signed-off-by: Lyude Paul <lyude@redhat.com>
+Reported-by: Marek Czernohous <mczernohous@gmail.com>
+Fixes: f575f2bdb6c3 ("drm/nouveau/kms/nv50-: Remove (nv_encoder->crtc) checks in ->disable callbacks")
+Cc: <stable@vger.kernel.org> # v5.12+
+---
+ drivers/gpu/drm/nouveau/dispnv50/disp.c | 10 ++++++++--
+ 1 file changed, 8 insertions(+), 2 deletions(-)
+
+diff --git a/drivers/gpu/drm/nouveau/dispnv50/disp.c b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+index 152361f7feb42..f19820dc055ae 100644
+--- a/drivers/gpu/drm/nouveau/dispnv50/disp.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/disp.c
+@@ -459,7 +459,7 @@ nv50_outp_get_old_connector(struct drm_atomic_commit *state, struct nouveau_enco
+ 	return NULL;
+ }
+ 
+-static struct nouveau_crtc * __maybe_unused
++static struct nouveau_crtc *
+ nv50_outp_get_old_crtc(const struct drm_atomic_commit *state, const struct nouveau_encoder *outp)
+ {
+ 	struct drm_crtc *crtc;
+@@ -1606,12 +1606,18 @@ static void
+ nv50_sor_atomic_disable(struct drm_encoder *encoder, struct drm_atomic_commit *state)
+ {
+ 	struct nouveau_encoder *nv_encoder = nouveau_encoder(encoder);
+-	struct nv50_head *head = nv50_head(nv_encoder->crtc);
++	struct nouveau_crtc *nv_crtc;
++	struct nv50_head *head;
+ 
+ #ifdef CONFIG_DRM_NOUVEAU_BACKLIGHT
+ 	nv50_sor_atomic_disable_backlight(nouveau_drm(state->dev), nv_encoder, state);
+ #endif
+ 
++	nv_crtc = nv50_outp_get_old_crtc(state, nv_encoder);
++	if (drm_WARN_ON(state->dev, !nv_crtc))
++		return;
++	head = nv50_head(&nv_crtc->base);
++
+ 	if (nv_encoder->dcb->type == DCB_OUTPUT_TMDS && nv_encoder->hdmi.enabled) {
+ 		nvif_outp_hdmi(&nv_encoder->outp, head->base.index,
+ 			       false, 0, 0, 0, false, false, false);
