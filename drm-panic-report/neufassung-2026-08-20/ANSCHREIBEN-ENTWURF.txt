@@ -1,0 +1,130 @@
+Subject: Re: [BUG] nouveau: drm_panic get_scanout_buffer() maps the BO from
+ panic context (ioremap + sleeping locks)
+
+> I will review and help with testing any patch that can improve the
+> current situation.
+
+Thank you, I took you up on that.  What follows is not a patch posting
+yet, it is the design and the two things I would rather have your
+opinion on before I put a series on the list, because one of them is a
+cost that the panic screen itself will never show.
+
+Two findings first, both of which surprised me.
+
+1. There is no kmap_local for iomem on 64 bit
+------------------------------------------------------------------
+
+io_mapping_map_atomic_wc() is exactly the primitive you described.  It
+goes through __iomap_local_pfn_prot() and allocates nothing.  But it
+only exists under CONFIG_HAVE_ATOMIC_IOMAP
+(include/linux/io-mapping.h:30), and on x86 that is "depends on X86_32"
+(arch/x86/Kconfig:3130-3132).  On
+x86-64 the fallback at :165 calls io_mapping_map_wc(), which is
+ioremap_wc().  So on the machines that matter it is the very thing the
+report complains about.
+
+2. A private mapping in the plane state does not survive fbcon
+------------------------------------------------------------------
+
+My first idea was the obvious one: map in ->prepare_fb, keep the mapping
+in the plane state, and let ->get_scanout_buffer() only read it.  That
+does not work on nouveau, and the reason is worth stating because it
+constrains any solution here.
+
+nouveau's ->vmap is drm_gem_ttm_vmap (nouveau_gem.c:225-226), and
+drm_fbdev_ttm_damage_blit() vmaps and vunmaps the scanout buffer object
+on every console update (drm_fbdev_ttm.c:126 and :133).  Those two
+mappings are not independent: ttm_mem_io_reserve() returns early once
+ttm_resource.bus is populated (ttm_bo_util.c:52-53), but
+ttm_mem_io_free() releases unconditionally (:62-76), and
+nouveau_ttm_io_mem_free_locked() hands the BAR1 window back without
+asking (nouveau_bo.c:1240-1246).
+
+So a second mapping of the same BO is not a second mapping, it is a
+second user of the first one, and the first teardown evicts everybody
+else.  A mapping parked in the plane state would be gutted by the next
+console print.
+
+What I have
+------------------------------------------------------------------
+
+Two patches, built and checkpatch-clean, not yet posted:
+
+  1/2 drm/nouveau: reference count the kernel CPU mapping of a
+      buffer object
+
+      Funnels nouveau's four kernel mapping sites through nvbo->kmap
+      and counts the users, with its own ->vmap/->vunmap instead of the
+      drm_gem_ttm helpers.  This is the shape qxl, loongson and
+      drm_gem_vram_helper already use.  It also keeps a mapped object
+      off the io_reserve_lru so the -ENOSPC path cannot revoke a window
+      that is still in use, and drops the mapping in ->move_notify,
+      because the aperture window it points into has just been revoked.
+
+  2/2 drm/nouveau/kms: don't map the scanout buffer in panic context
+
+      Maps in ->prepare_fb, unmaps in ->cleanup_fb, and
+      ->get_scanout_buffer() hands out only what is already mapped.  A
+      flag in the plane state records which state holds the reference.
+      Deliberately not tied to bo->pin_count: cursor and overlay planes
+      share this ->prepare_fb/->cleanup_fb pair without having
+      ->get_scanout_buffer, and dma-buf importers pin the same object,
+      so the last unpin is not the last unmap.
+
+The first thing I would like your opinion on
+------------------------------------------------------------------
+
+2/2 costs one ttm_bo_kmap()/ttm_bo_kunmap() pair per page flip whenever
+the framebuffer changes.  On VRAM that means a BAR1 window in buffer
+size, an ioremap_wc() of the whole framebuffer, and an MMU invalidate
+under the device-wide mmu->mutex (nvkm/subdev/mmu/vmmnv50.c:181-222) on
+the way in and out.  A framebuffer that stays put, such as an fbdev
+console, is mapped once.  CONFIG_DRM_PANIC=n pays nothing, and I gated
+it accordingly.
+
+I have not measured this on hardware yet.  I want to be explicit that
+the panic path does not exercise it at all: if this series is tested by
+triggering a panic, the cost stays invisible.  It shows up as flip
+latency and as mmu->mutex hold time under a compositor.
+
+If that price is too high, there is a precedent for the way out already
+in tree: drm_gem_vram_helper does not tear the mapping down on the last
+vunmap, it waits for ->move_notify (drm_gem_vram_helper.c:396-404 and
+:488-496).  For nouveau that would mean leaving an unreferenced mapping
+standing, which in turn means it must stay off the io_reserve_lru for
+good, because the -ENOSPC victim path does not hold the victim's
+reservation.  That is a different design with its own test matrix, so I
+did not build it speculatively.
+
+The second thing
+------------------------------------------------------------------
+
+Nobody in tree currently keeps a long-lived TTM mapping of a scanout
+buffer over a dynamically managed aperture window.  ast passes through a
+permanent ioremap of the VRAM aperture (ast/ast_mode.c:635), i915 uses
+an existing fbdev vma, mgag200 uses mdev->vram.  nouveau's BAR1 is a
+metered resource with unconditional teardown, and every residual risk I
+found hangs off that.  If you think this is the wrong shape for nouveau
+and would rather see the panic screen give up cleanly on VRAM than carry
+this, that is a legitimate answer and I would rather hear it now than
+after a v3.
+
+Unrelated, while I was in there
+------------------------------------------------------------------
+
+amdgpu_display_get_scanout_buffer() has the same problem:
+ttm_bo_kmap() from the panic handler (amdgpu_display.c:1907-1911).  It
+does check abo->kmap.virtual first, so it only maps when there is
+nothing there yet, and it takes no reservation at all.  I have not
+reported that separately, it seemed better in your hands than in a new
+thread from me.
+
+I also found a few pre-existing things in nouveau that I have kept out
+of this series on purpose and will send separately: two pin leaks on
+error paths in nv50_wndw_prepare_fb(), and ttm_bo_kunmap() releasing the
+BAR1 window without drm_vma_node_unmap(), which leaves userspace PTEs
+pointing at a window that may already belong to somebody else.
+
+I can post the series as an RFC whenever you say the direction is worth
+it.  I have the MCP79 that produced the original report, so I can test
+the panic screen itself here.

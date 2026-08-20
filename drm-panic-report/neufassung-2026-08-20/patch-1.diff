@@ -1,0 +1,257 @@
+diff --git a/drivers/gpu/drm/nouveau/nouveau_bo.c b/drivers/gpu/drm/nouveau/nouveau_bo.c
+index 0e8de6d4b36f..2c1bd3591e7f 100644
+--- a/drivers/gpu/drm/nouveau/nouveau_bo.c
++++ b/drivers/gpu/drm/nouveau/nouveau_bo.c
+@@ -141,6 +141,7 @@ nouveau_bo_del_ttm(struct ttm_buffer_object *bo)
+ 	struct nouveau_bo *nvbo = nouveau_bo(bo);
+ 
+ 	WARN_ON(nvbo->bo.pin_count > 0);
++	WARN_ON(nvbo->kmap_count > 0);
+ 	nouveau_bo_del_io_reserve_lru(bo);
+ 	nv10_bo_put_tile_region(dev, nvbo->tile, NULL);
+ 
+@@ -664,6 +665,64 @@ int nouveau_bo_unpin(struct nouveau_bo *nvbo)
+ 	return 0;
+ }
+ 
++/* The kernel CPU mapping of a buffer object is a shared singleton, not a
++ * private mapping per user.  TTM asks the driver to set up the aperture only
++ * for the first mapping of a resource, ttm_mem_io_reserve() returns early once
++ * ttm_resource.bus is populated, but it asks the driver to tear it down on
++ * every ttm_bo_kunmap() and ttm_bo_vunmap(), and
++ * nouveau_ttm_io_mem_free_locked() then releases the BAR1 window
++ * unconditionally.  A second mapping of the same buffer object is therefore
++ * not a second mapping, it is a second user of the first one, and the first
++ * teardown leaves the others pointing into BAR1 space that has since been
++ * handed to somebody else.
++ *
++ * Funnel every kernel mapping of a nouveau buffer object through nvbo->kmap
++ * and count the users.  The caller must hold the buffer object reservation.
++ */
++int
++nouveau_bo_map_locked(struct nouveau_bo *nvbo)
++{
++	int ret;
++
++	dma_resv_assert_held(nvbo->bo.base.resv);
++
++	if (nvbo->kmap.virtual) {
++		nvbo->kmap_count++;
++		return 0;
++	}
++
++	/* nouveau_ttm_io_mem_reserve() reclaims BAR1 space by revoking the io
++	 * mapping of whatever sits at the head of the io_reserve_lru, without
++	 * asking the users of that mapping.  Keep this object off the list for
++	 * as long as it is mapped.
++	 */
++	nouveau_bo_del_io_reserve_lru(&nvbo->bo);
++
++	ret = ttm_bo_kmap(&nvbo->bo, 0, PFN_UP(nvbo->bo.base.size), &nvbo->kmap);
++	if (ret) {
++		nouveau_bo_add_io_reserve_lru(&nvbo->bo);
++		return ret;
++	}
++
++	nvbo->kmap_count++;
++	return 0;
++}
++
++void
++nouveau_bo_unmap_locked(struct nouveau_bo *nvbo)
++{
++	dma_resv_assert_held(nvbo->bo.base.resv);
++
++	/* Tolerate an unmap of an object that is not mapped: ttm_bo_kunmap()
++	 * did the same, and nv04_display_fini() relies on it.
++	 */
++	if (!nvbo->kmap_count || --nvbo->kmap_count)
++		return;
++
++	ttm_bo_kunmap(&nvbo->kmap);
++	nouveau_bo_add_io_reserve_lru(&nvbo->bo);
++}
++
+ int
+ nouveau_bo_map(struct nouveau_bo *nvbo)
+ {
+@@ -673,7 +732,7 @@ nouveau_bo_map(struct nouveau_bo *nvbo)
+ 	if (ret)
+ 		return ret;
+ 
+-	ret = ttm_bo_kmap(&nvbo->bo, 0, PFN_UP(nvbo->bo.base.size), &nvbo->kmap);
++	ret = nouveau_bo_map_locked(nvbo);
+ 
+ 	ttm_bo_unreserve(&nvbo->bo);
+ 	return ret;
+@@ -682,10 +741,18 @@ nouveau_bo_map(struct nouveau_bo *nvbo)
+ void
+ nouveau_bo_unmap(struct nouveau_bo *nvbo)
+ {
++	int ret;
++
+ 	if (!nvbo)
+ 		return;
+ 
+-	ttm_bo_kunmap(&nvbo->kmap);
++	ret = ttm_bo_reserve(&nvbo->bo, false, false, NULL);
++	if (ret)
++		return;
++
++	nouveau_bo_unmap_locked(nvbo);
++
++	ttm_bo_unreserve(&nvbo->bo);
+ }
+ 
+ void
+@@ -766,7 +833,11 @@ void nouveau_bo_add_io_reserve_lru(struct ttm_buffer_object *bo)
+ 	struct nouveau_bo *nvbo = nouveau_bo(bo);
+ 
+ 	mutex_lock(&drm->ttm.io_reserve_mutex);
+-	list_move_tail(&nvbo->io_reserve_lru, &drm->ttm.io_reserve_lru);
++	/* A kernel mapping of this object is live, it must not be picked as a
++	 * victim by the -ENOSPC path of nouveau_ttm_io_mem_reserve().
++	 */
++	if (!nvbo->kmap.virtual)
++		list_move_tail(&nvbo->io_reserve_lru, &drm->ttm.io_reserve_lru);
+ 	mutex_unlock(&drm->ttm.io_reserve_mutex);
+ }
+ 
+@@ -1077,6 +1148,16 @@ static void nouveau_bo_move_ntfy(struct ttm_buffer_object *bo,
+ 
+ 	nouveau_bo_del_io_reserve_lru(bo);
+ 
++	/* The kernel mapping is about to become invalid.  For an io mapping
++	 * ttm_bo_handle_move_mem() has already revoked the aperture window it
++	 * points into, and the pages behind a system memory mapping are about
++	 * to be freed.  Drop it here, while the reservation is held and the
++	 * old resource is still around; nouveau_bo_map_locked() creates a
++	 * fresh one on demand.  Users that still hold a reference keep a copy
++	 * of the old address, exactly as they did with ttm_bo_vmap() before.
++	 */
++	ttm_bo_kunmap(&nvbo->kmap);
++
+ 	if (mem && new_reg->mem_type != TTM_PL_SYSTEM &&
+ 	    mem->mem.page == nvbo->page) {
+ 		list_for_each_entry(vma, &nvbo->vma_list, head) {
+diff --git a/drivers/gpu/drm/nouveau/nouveau_bo.h b/drivers/gpu/drm/nouveau/nouveau_bo.h
+index 6c26beeb427f..611202a16e10 100644
+--- a/drivers/gpu/drm/nouveau/nouveau_bo.h
++++ b/drivers/gpu/drm/nouveau/nouveau_bo.h
+@@ -17,7 +17,14 @@ struct nouveau_bo {
+ 	u32 valid_domains;
+ 	struct ttm_place placements[3];
+ 	bool force_coherent;
++
++	/* The single kernel CPU mapping of this buffer object, and the number
++	 * of users of it.  Both are protected by the buffer object
++	 * reservation.
++	 */
+ 	struct ttm_bo_kmap_obj kmap;
++	unsigned int kmap_count;
++
+ 	struct list_head head;
+ 	struct list_head io_reserve_lru;
+ 
+@@ -75,6 +82,8 @@ int  nouveau_bo_pin_locked(struct nouveau_bo *nvbo, uint32_t domain, bool contig
+ void nouveau_bo_unpin_locked(struct nouveau_bo *nvbo);
+ int  nouveau_bo_pin(struct nouveau_bo *, u32 flags, bool contig);
+ int  nouveau_bo_unpin(struct nouveau_bo *);
++int  nouveau_bo_map_locked(struct nouveau_bo *nvbo);
++void nouveau_bo_unmap_locked(struct nouveau_bo *nvbo);
+ int  nouveau_bo_map(struct nouveau_bo *);
+ void nouveau_bo_unmap(struct nouveau_bo *);
+ void nouveau_bo_placement_set(struct nouveau_bo *, u32 type, u32 busy);
+diff --git a/drivers/gpu/drm/nouveau/nouveau_gem.c b/drivers/gpu/drm/nouveau/nouveau_gem.c
+index 20dba02d6175..42e866c9544e 100644
+--- a/drivers/gpu/drm/nouveau/nouveau_gem.c
++++ b/drivers/gpu/drm/nouveau/nouveau_gem.c
+@@ -24,6 +24,8 @@
+  *
+  */
+ 
++#include <linux/iosys-map.h>
++
+ #include <drm/drm_gem_ttm_helper.h>
+ 
+ #include "nouveau_drv.h"
+@@ -214,6 +216,34 @@ nouveau_gem_object_close(struct drm_gem_object *gem, struct drm_file *file_priv)
+ 	ttm_bo_unreserve(&nvbo->bo);
+ }
+ 
++static int
++nouveau_gem_object_vmap(struct drm_gem_object *obj, struct iosys_map *map)
++{
++	struct nouveau_bo *nvbo = nouveau_gem_object(obj);
++	bool is_iomem;
++	void *vaddr;
++	int ret;
++
++	ret = nouveau_bo_map_locked(nvbo);
++	if (ret)
++		return ret;
++
++	vaddr = ttm_kmap_obj_virtual(&nvbo->kmap, &is_iomem);
++	if (is_iomem)
++		iosys_map_set_vaddr_iomem(map, (void __force __iomem *)vaddr);
++	else
++		iosys_map_set_vaddr(map, vaddr);
++
++	return 0;
++}
++
++static void
++nouveau_gem_object_vunmap(struct drm_gem_object *obj, struct iosys_map *map)
++{
++	nouveau_bo_unmap_locked(nouveau_gem_object(obj));
++	iosys_map_clear(map);
++}
++
+ const struct drm_gem_object_funcs nouveau_gem_object_funcs = {
+ 	.free = nouveau_gem_object_del,
+ 	.open = nouveau_gem_object_open,
+@@ -222,8 +252,8 @@ const struct drm_gem_object_funcs nouveau_gem_object_funcs = {
+ 	.pin = nouveau_gem_prime_pin,
+ 	.unpin = nouveau_gem_prime_unpin,
+ 	.get_sg_table = nouveau_gem_prime_get_sg_table,
+-	.vmap = drm_gem_ttm_vmap,
+-	.vunmap = drm_gem_ttm_vunmap,
++	.vmap = nouveau_gem_object_vmap,
++	.vunmap = nouveau_gem_object_vunmap,
+ 	.mmap = drm_gem_ttm_mmap,
+ 	.vm_ops = &nouveau_ttm_vm_ops,
+ };
+@@ -432,7 +462,7 @@ validate_fini_no_ticket(struct validate_op *op, struct nouveau_channel *chan,
+ 		}
+ 
+ 		if (unlikely(nvbo->validate_mapped)) {
+-			ttm_bo_kunmap(&nvbo->kmap);
++			nouveau_bo_unmap_locked(nvbo);
+ 			nvbo->validate_mapped = false;
+ 		}
+ 
+@@ -693,9 +723,8 @@ nouveau_gem_pushbuf_reloc_apply(struct nouveau_cli *cli,
+ 			break;
+ 		}
+ 
+-		if (!nvbo->kmap.virtual) {
+-			ret = ttm_bo_kmap(&nvbo->bo, 0, PFN_UP(nvbo->bo.base.size),
+-					  &nvbo->kmap);
++		if (!nvbo->validate_mapped) {
++			ret = nouveau_bo_map_locked(nvbo);
+ 			if (ret) {
+ 				NV_PRINTK(err, cli, "failed kmap for reloc\n");
+ 				break;
+@@ -898,10 +927,8 @@ nouveau_gem_ioctl_pushbuf(struct drm_device *dev, void *data,
+ 			cmd = chan->push.addr + ((chan->dma.cur + 2) << 2);
+ 			cmd |= 0x20000000;
+ 			if (unlikely(cmd != req->suffix0)) {
+-				if (!nvbo->kmap.virtual) {
+-					ret = ttm_bo_kmap(&nvbo->bo, 0,
+-							  PFN_UP(nvbo->bo.base.size),
+-							  &nvbo->kmap);
++				if (!nvbo->validate_mapped) {
++					ret = nouveau_bo_map_locked(nvbo);
+ 					if (ret) {
+ 						WIND_RING(chan);
+ 						goto out;
