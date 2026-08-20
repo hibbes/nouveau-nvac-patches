@@ -17,11 +17,10 @@ Two findings first, both of which surprised me.
 io_mapping_map_atomic_wc() is exactly the primitive you described.  It
 goes through __iomap_local_pfn_prot() and allocates nothing.  But it
 only exists under CONFIG_HAVE_ATOMIC_IOMAP
-(include/linux/io-mapping.h:30), and on x86 that is "depends on X86_32"
-(arch/x86/Kconfig:3130-3132).  On
-x86-64 the fallback at :165 calls io_mapping_map_wc(), which is
-ioremap_wc().  So on the machines that matter it is the very thing the
-report complains about.
+(include/linux/io-mapping.h:30), and on x86 that is "depends on
+X86_32" (arch/x86/Kconfig:3130-3132).  On x86-64 the fallback at :165
+calls io_mapping_map_wc(), which is ioremap_wc().  So on the machines
+that matter it is the very thing the report complains about.
 
 2. A private mapping in the plane state does not survive fbcon
 ------------------------------------------------------------------
