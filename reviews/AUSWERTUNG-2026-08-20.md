@@ -66,3 +66,34 @@ dagestanden, waere daraus eine Korrektur an uns geworden.
 | drm_panic-Bericht | bestaetigt, Patch in Arbeit, nicht eingereicht |
 
 Nichts steht mehr offen und wartet auf eine Antwort von uns.
+
+# ============================================================
+# Nachtrag 20.08. abends: Viererserie, zwei von vier durch
+# ============================================================
+
+| Patch | Stand |
+|---|---|
+| 1/4 unsubscribe kill-event | **Reviewed-by: Lyude Paul** (21:10 MESZ) |
+| 2/4 subscribe after fence context | noch keine Durchsicht |
+| 3/4 CACHE_ERROR-Filter | Umbau gewuenscht (21:21), vorbereitet in `nv04-fifo-v3/v4-3von4-nach-lyude/` |
+| 4/4 kill-events auf NV50+ | noch keine Durchsicht |
+
+Die einzige inhaltliche Anmerkung der ganzen Serie ist der strukturelle Umbau
+an 3/4. Kein Zweifel an der Sache, kein Zweifel an der Begruendung.
+
+**Entscheidung: warten.** Kommen zu 2/4 oder 4/4 noch Anmerkungen, ist eine
+gesammelte v4 besser als drei Einzelversaende.
+
+## Gesamtstand aller Einreichungen, 20.08. abends
+
+| Serie | Stand |
+|---|---|
+| forcedeth 1/2, 2/2 | **im Baum**, netdev/net, 9393f1d656a7 und cfa9178ce2e5 |
+| teardown v2 1/3 | **in drm-misc-next** |
+| teardown 2/3, 3/3 | Reviewed-by |
+| Spur 1 v4 1/2 | Reviewed-by, Push zugesagt |
+| Spur 1 v4 2/2 | ersetzt durch Lyudes Sechserserie, Reported-by Marek |
+| nv04-FIFO v3 1/4 | Reviewed-by |
+| nv04-FIFO v3 3/4 | Umbau vorbereitet |
+| nv04-FIFO v3 2/4, 4/4 | offen |
+| drm_panic | Patch durchgerechnet, Anschreiben entworfen, wartet auf Soak |
