@@ -1,0 +1,402 @@
+# Ergebnis
+
+**Patchdatei:** `/home/neo/projects/nouveau-nvac-patches/0001-drm-nouveau-dispnv50-panic-map.diff`
+(geprüft mit `git apply --check` gegen die drei Dateien aus `c21bb4193868`, sauber anwendbar)
+
+## Vorbemerkung: Ansatz (a) ist im Kern richtig, in der vorgeschlagenen Form aber falsch
+
+Verworfen wurden aus (a) drei Details, jeweils mit Grund:
+
+1. **`nouveau_bo_map()` in `prepare_fb` plus `nouveau_bo_unmap()` in `cleanup_fb`** geht nicht. `nouveau_bo_map()` ruft `ttm_bo_kmap()` bedingungslos (`nouveau_bo.c:668-680`), und `ttm_bo_kmap()` setzt `map->virtual = NULL; map->bo = bo;` ohne Prüfung (`ttm_bo_util.c:428-430`). `drm_atomic_helper_prepare_planes()` ruft `prepare_fb` für jeden neuen Plane-State ohne fb-Vergleich (`drm_atomic_helper.c:2832-2840`), `cleanup_planes` für jeden alten (`:3206-3214`). Ein wiederholt committeter Framebuffer ergibt map/map/unmap: eine ioremap-Fläche pro Commit geleckt und danach ist der angezeigte Puffer unabgebildet. Der Pin verträgt das, weil `ttm_bo_pin()` zählt (`ttm_bo.c:631`), das kmap nicht. **Ersetzt durch:** Abbildung an den `pin_count` gekoppelt, Pin und Map unter einer gemeinsamen Reservierung, Map nur wenn `!kmap.virtual`, Unmap nur wenn der Pin auf 0 fällt.
+
+2. **`nouveau_bo_unmap()` in `cleanup_fb`** nimmt keine Reservierung (`nouveau_bo.c:682-689`), liefe also unsynchronisiert gegen den Pushbuf-Pfad, der `nvbo->kmap.virtual` unter Reservierung liest und benutzt (`nouveau_gem.c:696`, `:901`) und sein kunmap vor `ttm_bo_unreserve()` macht (`:435` vs `:441`). **Ersetzt durch** `nouveau_bo_unpin_unmap()`, das reserviert.
+
+3. **„Absicherung gegen die Verdrängung aus Punkt 7"** adressiert das falsche Problem. Auf die `io_reserve_lru` kommt ein Puffer nur über `nouveau_bo_add_io_reserve_lru()`, und der einzige Aufrufer baumweit ist `nouveau_ttm_fault()` (`nouveau_gem.c:60`). Das reale und viel häufigere Problem ist ein anderes: `ttm_mem_io_reserve()` ist nicht zählend, sondern nur idempotent (`ttm_bo_util.c:49-53`), und `ttm_mem_io_free()` reißt bedingungslos ab (`:62-76`). `ttm_bo_vunmap()` ruft es am Ende immer (`:579`), und die fbdev-Emulation macht pro Damage-Flush ein `drm_client_buffer_vmap_local()`/`vunmap_local()` genau auf den Scanout-Puffer (`drm_fbdev_ttm.c:126-133`, nouveau benutzt `DRM_FBDEV_TTM_DRIVER_OPS`, `nouveau_drm.c:1386`). Nouveaus `io_mem_free` gibt darüber das BAR1-Fenster per `nvif_object_unmap_handle()` frei (`nouveau_bo.c:1244-1245`), ohne Refcount. Eine dauerhafte Abbildung wird dadurch still ungültig. **Da das nicht in nouveau reparierbar ist** (der zweite `ttm_mem_io_reserve()` ruft nouveaus Callback gar nicht erst auf, der Zähler müsste in TTM sitzen), ersetzt der Patch die Absicherung durch eine **Gültigkeitsprüfung im Panic-Callback**: die beim Abbilden gültige `bus.offset` wird gemerkt und im Panic gegen die aktuelle verglichen. Stimmt sie nicht, wird sauber aufgegeben statt in fremdes VRAM zu schreiben.
+
+---
+
+## 1. Der Diff
+
+```diff
+--- a/drivers/gpu/drm/nouveau/dispnv50/wndw.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/wndw.c
+@@ -520,6 +520,35 @@ nv50_wndw_atomic_check(struct drm_plane
+ 	return 0;
+ }
+ 
++/* drm_panic needs a CPU mapping of the scanout buffer, but it may not create
++ * one itself, so set it up together with the pin. Only the planes drm_panic
++ * actually looks at pay for it.
++ */
++static bool
++nv50_wndw_needs_panic_map(struct drm_plane *plane)
++{
++	return IS_ENABLED(CONFIG_DRM_PANIC) &&
++	       plane->helper_private->get_scanout_buffer;
++}
++
++static int
++nv50_wndw_pin_fb(struct drm_plane *plane, struct nouveau_bo *nvbo)
++{
++	if (nv50_wndw_needs_panic_map(plane))
++		return nouveau_bo_pin_map(nvbo, NOUVEAU_GEM_DOMAIN_VRAM, true);
++
++	return nouveau_bo_pin(nvbo, NOUVEAU_GEM_DOMAIN_VRAM, true);
++}
++
++static void
++nv50_wndw_unpin_fb(struct drm_plane *plane, struct nouveau_bo *nvbo)
++{
++	if (nv50_wndw_needs_panic_map(plane))
++		nouveau_bo_unpin_unmap(nvbo);
++	else
++		nouveau_bo_unpin(nvbo);
++}
++
+ static void
+ nv50_wndw_cleanup_fb(struct drm_plane *plane, struct drm_plane_state *old_state)
+ {
+@@ -531,7 +560,7 @@ nv50_wndw_cleanup_fb(struct drm_plane *p
+ 		return;
+ 
+ 	nvbo = nouveau_gem_object(old_state->fb->obj[0]);
+-	nouveau_bo_unpin(nvbo);
++	nv50_wndw_unpin_fb(plane, nvbo);
+ }
+ 
+ static int
+@@ -551,7 +580,7 @@ nv50_wndw_prepare_fb(struct drm_plane *p
+ 		return 0;
+ 
+ 	nvbo = nouveau_gem_object(fb->obj[0]);
+-	ret = nouveau_bo_pin(nvbo, NOUVEAU_GEM_DOMAIN_VRAM, true);
++	ret = nv50_wndw_pin_fb(plane, nvbo);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -559,8 +588,8 @@ nv50_wndw_prepare_fb(struct drm_plane *p
+ 		if (wndw->wndw.base.user.oclass < GB202_DISP_WINDOW_CHANNEL_DMA) {
+ 			ctxdma = nv50_wndw_ctxdma_new(wndw, fb);
+ 			if (IS_ERR(ctxdma)) {
+-				nouveau_bo_unpin(nvbo);
+-				return PTR_ERR(ctxdma);
++				ret = PTR_ERR(ctxdma);
++				goto err_unpin;
+ 			}
+ 
+ 			if (asyw->visible)
+@@ -578,19 +607,25 @@ nv50_wndw_prepare_fb(struct drm_plane *p
+ 
+ 	ret = drm_gem_plane_helper_prepare_fb(plane, state);
+ 	if (ret)
+-		return ret;
++		goto err_unpin;
+ 
+ 	asyw->image.offset[0] = nvbo->offset;
+ 
+ 	if (wndw->func->prepare) {
+ 		asyh = nv50_head_atom_get_new(asyw->state.state, asyw->state.crtc);
+-		if (IS_ERR(asyh))
+-			return PTR_ERR(asyh);
++		if (IS_ERR(asyh)) {
++			ret = PTR_ERR(asyh);
++			goto err_unpin;
++		}
+ 
+ 		wndw->func->prepare(wndw, asyh, asyw);
+ 	}
+ 
+ 	return 0;
++
++err_unpin:
++	nv50_wndw_unpin_fb(plane, nvbo);
++	return ret;
+ }
+ 
+ /* Only used by drm_panic get_scanout_buffer() and set_pixel(), so it is
+@@ -647,6 +682,35 @@ nv50_set_pixel(struct drm_scanout_buffer
+ 	iosys_map_wr(&sb->map[0], off, u32, color);
+ }
+ 
++/* Hand out the mapping that nv50_wndw_prepare_fb() set up. Nothing may be
++ * mapped from here: drm_panic calls ->get_scanout_buffer() under
++ * drm_panic_trylock(), a raw spinlock taken with interrupts disabled.
++ */
++static bool
++nv50_wndw_panic_map(struct nouveau_bo *nvbo, struct iosys_map *map)
++{
++	if (!nvbo->kmap.virtual)
++		return false;
++
++	if (!(nvbo->kmap.bo_kmap_type & TTM_BO_MAP_IOMEM_MASK)) {
++		iosys_map_set_vaddr(map, nvbo->kmap.virtual);
++		return true;
++	}
++
++	/* The BAR window an iomem mapping refers to is not refcounted: every
++	 * ttm_bo_vunmap() of this buffer, and the fbdev damage flush does one
++	 * per update, releases it through ttm_mem_io_free(), after which it
++	 * can be handed out to a different buffer. Use the mapping only while
++	 * the buffer still owns the bus address it was created for.
++	 */
++	if (!nvbo->bo.resource ||
++	    nvbo->bo.resource->bus.offset != nvbo->kmap_bus_offset)
++		return false;
++
++	iosys_map_set_vaddr_iomem(map, (void __iomem *)nvbo->kmap.virtual);
++	return true;
++}
++
+ static int
+ nv50_wndw_get_scanout_buffer(struct drm_plane *plane, struct drm_scanout_buffer *sb)
+ {
+@@ -668,16 +732,12 @@ nv50_wndw_get_scanout_buffer(struct drm_
+ 	if (nvbo->comp || fb->format->num_planes != 1)
+ 		return -EOPNOTSUPP;
+ 
+-	if (nouveau_bo_map(nvbo)) {
+-		drm_warn(plane->dev, "nouveau bo map failed, panic won't be displayed\n");
+-		return -ENOMEM;
++	if (!nv50_wndw_panic_map(nvbo, &sb->map[0])) {
++		drm_warn(plane->dev,
++			 "no usable mapping of the scanout buffer, panic won't be displayed\n");
++		return -ENODEV;
+ 	}
+ 
+-	if (nvbo->kmap.bo_kmap_type & TTM_BO_MAP_IOMEM_MASK)
+-		iosys_map_set_vaddr_iomem(&sb->map[0], (void __iomem *)nvbo->kmap.virtual);
+-	else
+-		iosys_map_set_vaddr(&sb->map[0], nvbo->kmap.virtual);
+-
+ 	sb->height = fb->height;
+ 	sb->width = fb->width;
+ 	sb->pitch[0] = fb->pitches[0];
+--- a/drivers/gpu/drm/nouveau/nouveau_bo.c
++++ b/drivers/gpu/drm/nouveau/nouveau_bo.c
+@@ -688,6 +688,67 @@ nouveau_bo_unmap(struct nouveau_bo *nvbo
+ 	ttm_bo_kunmap(&nvbo->kmap);
+ }
+ 
++/* Pin a buffer and set up a CPU mapping of it, both under the same
++ * reservation, and keep the mapping alive for as long as this pin lasts.
++ *
++ * For callers that need to touch the buffer from a context where mapping it
++ * is not possible - drm_panic runs its ->get_scanout_buffer() callback under
++ * a raw spinlock with interrupts disabled, where ttm_bo_reserve() must not
++ * sleep and ioremap() BUG()s.
++ */
++int
++nouveau_bo_pin_map(struct nouveau_bo *nvbo, uint32_t domain, bool contig)
++{
++	struct ttm_buffer_object *bo = &nvbo->bo;
++	int ret;
++
++	ret = ttm_bo_reserve(bo, false, false, NULL);
++	if (ret)
++		return ret;
++
++	ret = nouveau_bo_pin_locked(nvbo, domain, contig);
++	if (ret)
++		goto out;
++
++	/* nouveau_bo.kmap is a single slot without a refcount, and
++	 * ttm_bo_kmap() overwrites it without looking, so only map if it is
++	 * free. The only other user that can have a mapping in there is the
++	 * pushbuf path, and it drops it before releasing the reservation
++	 * (nouveau_gem.c, validate_fini_no_ticket()), so holding the
++	 * reservation here means the slot is either ours or unused.
++	 */
++	if (!nvbo->kmap.virtual) {
++		ret = ttm_bo_kmap(bo, 0, PFN_UP(bo->base.size), &nvbo->kmap);
++		if (ret) {
++			nouveau_bo_unpin_locked(nvbo);
++			goto out;
++		}
++
++		nvbo->kmap_bus_offset = bo->resource->bus.offset;
++	}
++
++out:
++	ttm_bo_unreserve(bo);
++	return ret;
++}
++
++void
++nouveau_bo_unpin_unmap(struct nouveau_bo *nvbo)
++{
++	struct ttm_buffer_object *bo = &nvbo->bo;
++
++	if (ttm_bo_reserve(bo, false, false, NULL))
++		return;
++
++	nouveau_bo_unpin_locked(nvbo);
++	if (!bo->pin_count) {
++		ttm_bo_kunmap(&nvbo->kmap);
++		nvbo->kmap_bus_offset = 0;
++	}
++
++	ttm_bo_unreserve(bo);
++}
++
+ void
+ nouveau_bo_sync_for_device(struct nouveau_bo *nvbo)
+ {
+--- a/drivers/gpu/drm/nouveau/nouveau_bo.h
++++ b/drivers/gpu/drm/nouveau/nouveau_bo.h
+@@ -18,6 +18,12 @@ struct nouveau_bo {
+ 	struct ttm_place placements[3];
+ 	bool force_coherent;
+ 	struct ttm_bo_kmap_obj kmap;
++	/* Bus address @kmap was created for, valid only for an iomem @kmap.
++	 * The BAR window behind such a mapping is not refcounted, so it can
++	 * go away underneath us; comparing this against the current
++	 * ttm_resource.bus.offset detects that.
++	 */
++	u64 kmap_bus_offset;
+ 	struct list_head head;
+ 	struct list_head io_reserve_lru;
+ 
+@@ -77,6 +83,8 @@ int  nouveau_bo_pin(struct nouveau_bo *,
+ int  nouveau_bo_unpin(struct nouveau_bo *);
+ int  nouveau_bo_map(struct nouveau_bo *);
+ void nouveau_bo_unmap(struct nouveau_bo *);
++int  nouveau_bo_pin_map(struct nouveau_bo *, u32 domain, bool contig);
++void nouveau_bo_unpin_unmap(struct nouveau_bo *);
+ void nouveau_bo_placement_set(struct nouveau_bo *, u32 type, u32 busy);
+ void nouveau_bo_wr16(struct nouveau_bo *, unsigned index, u16 val);
+ u32  nouveau_bo_rd32(struct nouveau_bo *, unsigned index);
+```
+
+---
+
+## 2. Commit-Text
+
+```
+drm/nouveau/dispnv50: don't map the scanout buffer from panic context
+
+nv50_wndw_get_scanout_buffer() calls nouveau_bo_map() on the scanout
+buffer. drm_panic calls ->get_scanout_buffer() while holding
+mode_config.panic_lock, taken with drm_panic_trylock(), which is a
+raw_spin_trylock_irqsave() (include/drm/drm_panic.h:133,
+drivers/gpu/drm/drm_panic.c:927 and :930). Neither sleeping nor
+allocating is allowed there, and nouveau_bo_map() does both:
+ttm_bo_reserve() takes the dma_resv ww_mutex, and for a VRAM buffer
+ttm_bo_kmap() ends up in ttm_bo_ioremap() -> ioremap_wc(), which on
+x86 reaches __get_vm_area_node() and BUG()s when entered with
+interrupts disabled.
+
+Reported on a MCP79 (GeForce 9400M, nv50/Tesla): instead of the panic
+screen the machine takes a second oops inside panic().
+
+Fix it by setting the mapping up in nv50_wndw_prepare_fb(), which runs
+in ordinary process context. drm_atomic_helper_prepare_planes() takes
+no locks of its own, and the buffer is not reserved on entry, which is
+why nv50_wndw_prepare_fb() can already call nouveau_bo_pin(). This is
+also the place drm_panic documents for it: "Anything set up by
+&drm_plane_helper_funcs.fb_prepare and cleaned up
+&drm_plane_helper_funcs.fb_cleanup is safe to access"
+(include/drm/drm_panic.h:115). begin_fb_access(), where the vtable
+documentation would otherwise put a vmap, is explicitly ruled out at
+:122.
+
+The mapping cannot simply be added next to the existing pin, for two
+reasons.
+
+First, struct nouveau_bo has a single ttm_bo_kmap_obj and no refcount
+on it, while ttm_bo_kmap() overwrites it unconditionally
+(ttm_bo_util.c:428) and ttm_bo_kunmap() tears it down on the first
+call. drm_atomic_helper_prepare_planes() runs ->prepare_fb for every
+new plane state and drm_atomic_helper_cleanup_planes() runs
+->cleanup_fb for every old one, neither of them comparing framebuffers,
+so committing the same framebuffer twice would map twice and unmap
+once, leaking one ioremap() per commit and leaving the displayed buffer
+unmapped. So add nouveau_bo_pin_map()/nouveau_bo_unpin_unmap(), which
+tie the lifetime of the mapping to the pin count and do pin and map
+under one reservation. That also keeps every writer of
+nouveau_bo.kmap under the buffer reservation, which is what the pushbuf
+path relies on (nouveau_gem.c:696 and :901 test kmap.virtual under the
+reservation, :435 kunmaps before ttm_bo_unreserve()).
+
+Second, the BAR window an iomem mapping refers to is not refcounted.
+ttm_mem_io_reserve() is merely idempotent (ttm_bo_util.c:49) and
+ttm_mem_io_free() releases unconditionally (:62), and both
+ttm_bo_kunmap() (:478) and ttm_bo_vunmap() (:579) call the latter. In
+nouveau that ends in nvif_object_unmap_handle() (nouveau_bo.c:1245)
+and nvkm_vmm_put() on the BAR1 VMA, again without a refcount
+(nvkm/subdev/mmu/umem.c:63). The fbdev emulation does one
+drm_client_buffer_vmap_local()/vunmap_local() pair per damage flush on
+exactly this buffer (drm_fbdev_ttm.c:126), so a mapping held across it
+can end up pointing at a BAR1 range that has since been handed to a
+different buffer. Since the panic handler has no way to take a lock and
+no flag to consult, remember the bus address the mapping was created
+for and compare it against the current one before using the mapping.
+A mismatch means the mapping went stale, and giving up cleanly is the
+only correct answer; writing into an unrelated buffer during a panic
+would be worse than showing nothing.
+
+The mapping is only established for planes that have a
+->get_scanout_buffer callback, that is primary planes
+(dispnv50/wndw.c:891), and only when CONFIG_DRM_PANIC is enabled.
+Overlay and cursor planes keep the plain pin.
+
+While adding the unwind for the new mapping, the two error paths after
+the pin in nv50_wndw_prepare_fb() are converted to it as well. They
+returned without unpinning, and drm_atomic_helper_prepare_planes()
+does not run ->cleanup_fb for the plane whose ->prepare_fb failed
+(drm_atomic_helper.c:2880, "if (j >= i) continue;"), so the pin leaked
+and later showed up as WARN_ON_ONCE(bo->pin_count) in ttm_bo_release().
+
+Suspend and resume need no special handling: nouveau_display_suspend()
+goes through drm_atomic_helper_suspend() (nouveau_display.c:770) and
+nouveau_display_resume() through drm_atomic_helper_resume() (:794), so
+the mapping is torn down and re-established along with the pin. Module
+removal is safe too, drm_panic_unregister() runs in
+drm_dev_unregister() (drm_drv.c:1150) before nouveau_display_fini()
+shuts the planes down.
+
+Fixes: XXXXXXXXXXXX ("drm/nouveau: Add drm_panic support")
+Cc: stable@vger.kernel.org
+Reported-by: <reporter>
+Closes: <link>
+```
+
+**Zum `Fixes:`-Tag:** ich konnte den einführenden Commit nicht auflösen. Das Repository `/home/neo/linux-nouveau-patches` ist flach (`.git/shallow`), `git blame -L 651,652 c21bb4193868 -- drivers/gpu/drm/nouveau/dispnv50/wndw.c` liefert nur die Shallow-Grenze `^a55f7f5f29b3`. Vor dem Absenden zu ermitteln mit `git log --oneline -S nv50_wndw_get_scanout_buffer -- drivers/gpu/drm/nouveau/dispnv50/wndw.c` in einem vollständigen Klon. **Der Hash ist ein Platzhalter, keine Behauptung.**
+
+**Zu `Cc: stable`:** angebracht. Es ist kein Feature, sondern ein zweiter Oops in `panic()` genau dann, wenn der Rechner ohnehin gerade stirbt, also Verlust der Diagnose-Information. Der Fix ist auf den Zweig beschränkt, der ohne den Fehler gar nicht laufen kann.
+
+---
+
+## 3. Getroffene Entscheidungen
+
+| Entscheidung | Begründung |
+|---|---|
+| **Abbildung an `pin_count` koppeln, nicht an den Commit** | `nouveau_bo.kmap` ist ein einziger Slot ohne Refcount (`nouveau_bo.h:20`), `ttm_bo_kmap()` überschreibt ihn (`ttm_bo_util.c:428`), `ttm_bo_kunmap()` gibt beim ersten Aufruf frei (`:459`). `pin_count` zählt dagegen bereits korrekt (`ttm_bo.c:631`, `:647`). Das heilt Doppel-`prepare_fb` (gleicher fb zweimal committet, gleicher fb auf zwei Primary-Planes) ohne ein neues Zählfeld. |
+| **Pin und Map unter einer Reservierung** (`nouveau_bo_pin_map`) statt zweier Zyklen | Schließt das Fenster zwischen `nouveau_bo_pin()`s `ttm_bo_unreserve()` (`nouveau_bo.c:648`) und einem separaten `nouveau_bo_map()`. Folgt der bestehenden Aufteilung `nouveau_bo_pin()` / `nouveau_bo_pin_locked()` (`:639` / `:544`, letztere mit `dma_resv_assert_held`). |
+| **`nouveau_bo_unpin_unmap()` reserviert, statt `nouveau_bo_unmap()` zu benutzen** | `nouveau_bo_unmap()` (`:682-689`) nimmt keine Reservierung. Der Pushbuf-Pfad liest und benutzt `nvbo->kmap.virtual` unter Reservierung (`nouveau_gem.c:696`, `:901`) und kunmapped vor `ttm_bo_unreserve()` (`:435` vs `:441`). Nach dem Patch stehen ausnahmslos alle Schreiber von `nvbo->kmap` unter der BO-Reservierung, das ist eine Aussage, die man im Commit-Text vertreten kann. |
+| **`kmap_bus_offset` als Stale-Erkennung, statt zu versuchen, die Verdrängung zu verhindern** | Ein nouveau-lokaler Refcount ist unmöglich: `ttm_mem_io_reserve()` kehrt beim zweiten Nutzer schon in TTM zurück (`ttm_bo_util.c:52`), nouveaus `io_mem_reserve` wird gar nicht gerufen, es gibt also nichts zu zählen. `ttm_mem_io_free()` nullt `bus.offset` in TTM-Code (`:74`), unabhängig davon, was nouveaus `io_mem_free` tut. Der Vergleich der Busadresse ist die einzige Prüfung, die im Panic-Kontext möglich ist: ein reines Speicherlesen, kein Lock, keine Allokation. Er ist auch korrekt und nicht nur heuristisch: `bus.offset` ist bei nv50+ die physische Adresse aus `nvif_object_map_handle()` (`nouveau_bo.c:1333`), das `ioremap()` bildet genau diese physische Adresse ab. Stimmt sie noch, bildet BAR1 dort noch diesen Puffer ab. |
+| **Nur Primary-Planes und nur bei `CONFIG_DRM_PANIC`** | `get_scanout_buffer` steht nur in `nv50_wndw_primary_helper` (`wndw.c:712-717`), zugewiesen nach `plane->type` (`:891-894`), und `drm_panic_register()` überspringt Planes ohne den Callback (`drm_panic.c:1036`). Das Feld in `drm_plane_helper_funcs` ist aber nicht per `#ifdef` geschützt (`drm_modeset_helper_vtables.h:1462`), deshalb zusätzlich `IS_ENABLED(CONFIG_DRM_PANIC)`. Spart BAR1-Fenster und Kernel-VA für Overlays und Cursor. |
+| **`-ENODEV` statt `-ENOMEM` im Aufgabepfad** | `drm_panic` wertet den Wert nur binär aus (`drm_panic.c:932`), der konkrete Code ist Konvention. `-ENODEV` entspricht dem, was xe im Fall „kein nutzbarer Puffer" liefert (`xe/display/xe_panic.c:92`). |
+| **Prüfung `!kmap.virtual` VOR `bo_kmap_type`** | `ttm_bo_kunmap()` setzt `map->virtual = NULL`, lässt `bo_kmap_type` aber stehen (`ttm_bo_util.c:479-481`). Der bisherige Code las den Typ ungeprüft. |
+| **`drm_warn()` behalten, kein `WARN()`** | printk ist im Panic zulässig (`bust_spinlocks(1)`, `kernel/panic.c:634`), ein `WARN()` würde einen zusätzlichen Stack-Dump im Panic auslösen. |
+| **Die zwei Pin-Lecks in `prepare_fb` mit repariert, statt als Vorpatch** | Der neue `err_unpin`-Pfad wird für die neue Abbildung ohnehin gebraucht; die beiden Rückkehrpunkte (`wndw.c:580`, `:587`) müssen ihn dann mitbenutzen, sonst leckt der Patch selbst. Ein eigener Vorpatch wäre die formal sauberere Variante. **Wenn der Review das verlangt, ist der Split trivial:** Patch 1 nur die `goto err_unpin`-Umstellung mit `nouveau_bo_unpin()`, Patch 2 der Rest. |
+| **Kein `panic_flush`-Hook** | `drm_panic` setzt nach dem Zeichnen keine Schreibbarriere und ruft nur den optionalen Hook (`drm_panic.c:942`). Bei write combining könnten die letzten Schreibvorgänge in den WC-Puffern hängen. Das ist ein eigenständiges, von diesem Fehler unabhängiges Thema und gehört nicht in einen Fix, der `Cc: stable` trägt. |
+
+---
+
+## 4. Was der Patch NICHT löst
+
+1. **Der Panic-Bildschirm bleibt unter aktiver fbdev-Emulation unerreichbar.** Nach jedem Damage-Flush hat `drm_fbdev_ttm` per `ttm_bo_vunmap()` -> `ttm_mem_io_free()` die io-Reservierung abgeräumt (`drm_fbdev_ttm.c:126-133`, `ttm_bo_util.c:579`, `:62-76`), `bus.offset` ist 0, die Prüfung schlägt fehl, der Callback gibt auf. Unter einem laufenden Compositor, der nicht über fbdev geht, funktioniert er. **Die eigentliche Reparatur ist ein Refcount auf die io-Reservierung in `ttm_mem_io_reserve()`/`ttm_mem_io_free()`**, also eine TTM-Änderung über alle Treiber, die getrennt einzureichen und mit dem TTM-Maintainer abzustimmen ist. Der Patch macht den Fall wenigstens sichtbar (`drm_warn`) statt still falsch.
+
+2. **`ioremap()`/`iounmap()` pro Flip auf der Primary-Plane.** Bei doppelt gepuffertem Betrieb fällt der Pin jedes Puffers beim `cleanup_fb` des Folge-Commits auf 0, also eine Ab- und eine Neuabbildung über die volle BO-Größe pro Bild (bei 1920x1200x32 sind das 2250 Seiten, `ttm_bo_util.c:445-448`). Ich habe das nicht gemessen. Wer den Aufwand ganz vermeiden will, müsste die Abbildung bis zur BO-Zerstörung stehen lassen, was ein `ttm_bo_kunmap()` in `nouveau_bo_del_ttm()` (`nouveau_bo.c:135-155`, hat heute keins) und dauerhaften BAR1-Verbrauch pro je angezeigtem Framebuffer bedeutete.
+
+3. **BAR1-Verbrauch auf Karten mit VRAM > BAR1.** Pro aktivem Head bleibt eine Framebuffer-Größe BAR1 gebunden, während des Flip-Fensters kurzzeitig zwei. Die neue Abbildung landet nie auf der `io_reserve_lru` (einziger Erzeuger ist `nouveau_gem.c:60`), ist also für den `-ENOSPC`-Verdrängungspfad unsichtbar und nicht reklaimierbar. Auf der Zielmaschine (BAR1 256 MB = VRAM 256 MB) irrelevant, dort kann `-ENOSPC` nicht eintreten; die Konfiguration VRAM > BAR1 ist damit **ungetestet**.
+
+4. **Die Verdrängungsschleife in `nouveau_ttm_io_mem_reserve()` bleibt fehlerhaft.** Sie nimmt bedingungslos den Kopf der Liste, prüft weder `bo->pin_count` noch nimmt sie die `dma_resv` des Opfers, und dereferenziert `nvbo->bo.resource` ungeprüft (`nouveau_bo.c:1345-1355`). Das ist ein eigener, von drm_panic unabhängiger Fehler und gehört getrennt eingereicht.
+
+5. **Runtime-PM.** `nouveau_display_suspend()` überspringt `drm_atomic_helper_suspend()` bei `runtime == true` (`nouveau_display.c:770`), die Planes behalten fb und Pin, und `ttm_resource_manager_evict_all()` übergeht gepinnte Puffer (`ttm_bo.c:524`). `drm_panic` prüft keinen PM-Zustand vor `draw_panic_plane()` (`drm_panic.c:920-949`). Ein Panic-Bild in ein Gerät in D3cold zu schreiben bleibt sinnlos. Der Patch verursacht das nicht und löst es nicht; das ist eine Frage an den drm_panic-Maintainer.
+
+6. **`nv50_set_pixel()` übergibt `sb->width` statt `sb->pitch[0]`.** `nv50_get_block_off()` reicht das Argument an `nouveau_get_width_in_blocks()` weiter, und die teilt durch `NV_TILE_GOB_WIDTH_BYTES` (64), erwartet also eine **Byte**-Zeilenlänge (`dispnv50/tile.h:21-23`, Kommentar `:12` „All GOBs and blocks have the same width: 64 bytes"). `nv50_set_pixel_swizzle()` übergibt korrekt `sb->pitch[0]` (`wndw.c:621`), `nv50_set_pixel()` übergibt `sb->width` (`wndw.c:641`). Dass die Bytelesart die richtige ist, bestätigt `nouveau_check_bl_size()`, das denselben Helfer mit `mode_cmd->pitches[i]` füttert (`nouveau_display.c:239`, Aufruf `:305-308`). Bei 32 bpp ist die Blockspaltenzahl damit um Faktor vier zu klein. **Das trifft genau die Meldemaschine:** NVAC ist Chipsatz 0xac, also < 0x160, also der `nv50_set_pixel()`-Zweig (`wndw.c:696-699`). Ohne diese Korrektur ist das Panic-Bild auf gekacheltem Puffer auch nach diesem Patch verzerrt. Eigener Einzeiler-Patch, sollte zusammen mit diesem eingereicht werden, sonst zeigt Jocelyns Test das Falsche.
+
+7. **`amdgpu` enthält denselben Verstoß.** `amdgpu_display_get_scanout_buffer()` ruft `ttm_bo_kmap()` direkt aus dem Panic-Callback (`amd/amdgpu/amdgpu_display.c:1906-1913`). Nicht Gegenstand dieses Patches, gehört aber in die Mail an Jocelyn Falempe, damit sie es getrennt aufgreifen kann.
+
+8. **Nicht getestet.** Der Patch ist gegen `c21bb4193868` gelesen und `git apply`-geprüft, aber nicht gebaut und nicht gebootet. Für den Test: `CONFIG_DRM_PANIC_DEBUG`, Auslöser `drm_panic_plane_N` in debugfs (`drm_panic.c:970-1002`). Der deckt allerdings nur die Zeichenlogik ab, nicht den ursprünglichen `BUG_ON`-Pfad, weil `debugfs_trigger_write()` im Prozesskontext läuft; dafür braucht es einen echten Panic (etwa `echo c > /proc/sysrq-trigger`).

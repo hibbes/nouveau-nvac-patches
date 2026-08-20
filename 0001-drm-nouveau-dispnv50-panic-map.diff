@@ -1,0 +1,247 @@
+--- a/drivers/gpu/drm/nouveau/dispnv50/wndw.c
++++ b/drivers/gpu/drm/nouveau/dispnv50/wndw.c
+@@ -520,6 +520,35 @@ nv50_wndw_atomic_check(struct drm_plane
+ 	return 0;
+ }
+ 
++/* drm_panic needs a CPU mapping of the scanout buffer, but it may not create
++ * one itself, so set it up together with the pin. Only the planes drm_panic
++ * actually looks at pay for it.
++ */
++static bool
++nv50_wndw_needs_panic_map(struct drm_plane *plane)
++{
++	return IS_ENABLED(CONFIG_DRM_PANIC) &&
++	       plane->helper_private->get_scanout_buffer;
++}
++
++static int
++nv50_wndw_pin_fb(struct drm_plane *plane, struct nouveau_bo *nvbo)
++{
++	if (nv50_wndw_needs_panic_map(plane))
++		return nouveau_bo_pin_map(nvbo, NOUVEAU_GEM_DOMAIN_VRAM, true);
++
++	return nouveau_bo_pin(nvbo, NOUVEAU_GEM_DOMAIN_VRAM, true);
++}
++
++static void
++nv50_wndw_unpin_fb(struct drm_plane *plane, struct nouveau_bo *nvbo)
++{
++	if (nv50_wndw_needs_panic_map(plane))
++		nouveau_bo_unpin_unmap(nvbo);
++	else
++		nouveau_bo_unpin(nvbo);
++}
++
+ static void
+ nv50_wndw_cleanup_fb(struct drm_plane *plane, struct drm_plane_state *old_state)
+ {
+@@ -531,7 +560,7 @@ nv50_wndw_cleanup_fb(struct drm_plane *p
+ 		return;
+ 
+ 	nvbo = nouveau_gem_object(old_state->fb->obj[0]);
+-	nouveau_bo_unpin(nvbo);
++	nv50_wndw_unpin_fb(plane, nvbo);
+ }
+ 
+ static int
+@@ -551,7 +580,7 @@ nv50_wndw_prepare_fb(struct drm_plane *p
+ 		return 0;
+ 
+ 	nvbo = nouveau_gem_object(fb->obj[0]);
+-	ret = nouveau_bo_pin(nvbo, NOUVEAU_GEM_DOMAIN_VRAM, true);
++	ret = nv50_wndw_pin_fb(plane, nvbo);
+ 	if (ret)
+ 		return ret;
+ 
+@@ -559,8 +588,8 @@ nv50_wndw_prepare_fb(struct drm_plane *p
+ 		if (wndw->wndw.base.user.oclass < GB202_DISP_WINDOW_CHANNEL_DMA) {
+ 			ctxdma = nv50_wndw_ctxdma_new(wndw, fb);
+ 			if (IS_ERR(ctxdma)) {
+-				nouveau_bo_unpin(nvbo);
+-				return PTR_ERR(ctxdma);
++				ret = PTR_ERR(ctxdma);
++				goto err_unpin;
+ 			}
+ 
+ 			if (asyw->visible)
+@@ -578,19 +607,25 @@ nv50_wndw_prepare_fb(struct drm_plane *p
+ 
+ 	ret = drm_gem_plane_helper_prepare_fb(plane, state);
+ 	if (ret)
+-		return ret;
++		goto err_unpin;
+ 
+ 	asyw->image.offset[0] = nvbo->offset;
+ 
+ 	if (wndw->func->prepare) {
+ 		asyh = nv50_head_atom_get_new(asyw->state.state, asyw->state.crtc);
+-		if (IS_ERR(asyh))
+-			return PTR_ERR(asyh);
++		if (IS_ERR(asyh)) {
++			ret = PTR_ERR(asyh);
++			goto err_unpin;
++		}
+ 
+ 		wndw->func->prepare(wndw, asyh, asyw);
+ 	}
+ 
+ 	return 0;
++
++err_unpin:
++	nv50_wndw_unpin_fb(plane, nvbo);
++	return ret;
+ }
+ 
+ /* Only used by drm_panic get_scanout_buffer() and set_pixel(), so it is
+@@ -647,6 +682,35 @@ nv50_set_pixel(struct drm_scanout_buffer
+ 	iosys_map_wr(&sb->map[0], off, u32, color);
+ }
+ 
++/* Hand out the mapping that nv50_wndw_prepare_fb() set up. Nothing may be
++ * mapped from here: drm_panic calls ->get_scanout_buffer() under
++ * drm_panic_trylock(), a raw spinlock taken with interrupts disabled.
++ */
++static bool
++nv50_wndw_panic_map(struct nouveau_bo *nvbo, struct iosys_map *map)
++{
++	if (!nvbo->kmap.virtual)
++		return false;
++
++	if (!(nvbo->kmap.bo_kmap_type & TTM_BO_MAP_IOMEM_MASK)) {
++		iosys_map_set_vaddr(map, nvbo->kmap.virtual);
++		return true;
++	}
++
++	/* The BAR window an iomem mapping refers to is not refcounted: every
++	 * ttm_bo_vunmap() of this buffer, and the fbdev damage flush does one
++	 * per update, releases it through ttm_mem_io_free(), after which it
++	 * can be handed out to a different buffer. Use the mapping only while
++	 * the buffer still owns the bus address it was created for.
++	 */
++	if (!nvbo->bo.resource ||
++	    nvbo->bo.resource->bus.offset != nvbo->kmap_bus_offset)
++		return false;
++
++	iosys_map_set_vaddr_iomem(map, (void __iomem *)nvbo->kmap.virtual);
++	return true;
++}
++
+ static int
+ nv50_wndw_get_scanout_buffer(struct drm_plane *plane, struct drm_scanout_buffer *sb)
+ {
+@@ -668,16 +732,12 @@ nv50_wndw_get_scanout_buffer(struct drm_
+ 	if (nvbo->comp || fb->format->num_planes != 1)
+ 		return -EOPNOTSUPP;
+ 
+-	if (nouveau_bo_map(nvbo)) {
+-		drm_warn(plane->dev, "nouveau bo map failed, panic won't be displayed\n");
+-		return -ENOMEM;
++	if (!nv50_wndw_panic_map(nvbo, &sb->map[0])) {
++		drm_warn(plane->dev,
++			 "no usable mapping of the scanout buffer, panic won't be displayed\n");
++		return -ENODEV;
+ 	}
+ 
+-	if (nvbo->kmap.bo_kmap_type & TTM_BO_MAP_IOMEM_MASK)
+-		iosys_map_set_vaddr_iomem(&sb->map[0], (void __iomem *)nvbo->kmap.virtual);
+-	else
+-		iosys_map_set_vaddr(&sb->map[0], nvbo->kmap.virtual);
+-
+ 	sb->height = fb->height;
+ 	sb->width = fb->width;
+ 	sb->pitch[0] = fb->pitches[0];
+--- a/drivers/gpu/drm/nouveau/nouveau_bo.c
++++ b/drivers/gpu/drm/nouveau/nouveau_bo.c
+@@ -688,6 +688,67 @@ nouveau_bo_unmap(struct nouveau_bo *nvbo
+ 	ttm_bo_kunmap(&nvbo->kmap);
+ }
+ 
++/* Pin a buffer and set up a CPU mapping of it, both under the same
++ * reservation, and keep the mapping alive for as long as this pin lasts.
++ *
++ * For callers that need to touch the buffer from a context where mapping it
++ * is not possible - drm_panic runs its ->get_scanout_buffer() callback under
++ * a raw spinlock with interrupts disabled, where ttm_bo_reserve() must not
++ * sleep and ioremap() BUG()s.
++ */
++int
++nouveau_bo_pin_map(struct nouveau_bo *nvbo, uint32_t domain, bool contig)
++{
++	struct ttm_buffer_object *bo = &nvbo->bo;
++	int ret;
++
++	ret = ttm_bo_reserve(bo, false, false, NULL);
++	if (ret)
++		return ret;
++
++	ret = nouveau_bo_pin_locked(nvbo, domain, contig);
++	if (ret)
++		goto out;
++
++	/* nouveau_bo.kmap is a single slot without a refcount, and
++	 * ttm_bo_kmap() overwrites it without looking, so only map if it is
++	 * free. The only other user that can have a mapping in there is the
++	 * pushbuf path, and it drops it before releasing the reservation
++	 * (nouveau_gem.c, validate_fini_no_ticket()), so holding the
++	 * reservation here means the slot is either ours or unused.
++	 */
++	if (!nvbo->kmap.virtual) {
++		ret = ttm_bo_kmap(bo, 0, PFN_UP(bo->base.size), &nvbo->kmap);
++		if (ret) {
++			nouveau_bo_unpin_locked(nvbo);
++			goto out;
++		}
++
++		nvbo->kmap_bus_offset = bo->resource->bus.offset;
++	}
++
++out:
++	ttm_bo_unreserve(bo);
++	return ret;
++}
++
++void
++nouveau_bo_unpin_unmap(struct nouveau_bo *nvbo)
++{
++	struct ttm_buffer_object *bo = &nvbo->bo;
++
++	if (ttm_bo_reserve(bo, false, false, NULL))
++		return;
++
++	nouveau_bo_unpin_locked(nvbo);
++	if (!bo->pin_count) {
++		ttm_bo_kunmap(&nvbo->kmap);
++		nvbo->kmap_bus_offset = 0;
++	}
++
++	ttm_bo_unreserve(bo);
++}
++
+ void
+ nouveau_bo_sync_for_device(struct nouveau_bo *nvbo)
+ {
+--- a/drivers/gpu/drm/nouveau/nouveau_bo.h
++++ b/drivers/gpu/drm/nouveau/nouveau_bo.h
+@@ -18,6 +18,12 @@ struct nouveau_bo {
+ 	struct ttm_place placements[3];
+ 	bool force_coherent;
+ 	struct ttm_bo_kmap_obj kmap;
++	/* Bus address @kmap was created for, valid only for an iomem @kmap.
++	 * The BAR window behind such a mapping is not refcounted, so it can
++	 * go away underneath us; comparing this against the current
++	 * ttm_resource.bus.offset detects that.
++	 */
++	u64 kmap_bus_offset;
+ 	struct list_head head;
+ 	struct list_head io_reserve_lru;
+ 
+@@ -77,6 +83,8 @@ int  nouveau_bo_pin(struct nouveau_bo *,
+ int  nouveau_bo_unpin(struct nouveau_bo *);
+ int  nouveau_bo_map(struct nouveau_bo *);
+ void nouveau_bo_unmap(struct nouveau_bo *);
++int  nouveau_bo_pin_map(struct nouveau_bo *, u32 domain, bool contig);
++void nouveau_bo_unpin_unmap(struct nouveau_bo *);
+ void nouveau_bo_placement_set(struct nouveau_bo *, u32 type, u32 busy);
+ void nouveau_bo_wr16(struct nouveau_bo *, unsigned index, u16 val);
+ u32  nouveau_bo_rd32(struct nouveau_bo *, unsigned index);
