@@ -1,6 +1,6 @@
 --- a/drivers/gpu/drm/nouveau/nouveau_chan.c
 +++ b/drivers/gpu/drm/nouveau/nouveau_chan.c
-@@ -43,9 +43,19 @@
+@@ -43,9 +43,22 @@
  void
  nouveau_channel_kill(struct nouveau_channel *chan)
  {
@@ -9,20 +9,23 @@
  	atomic_set(&chan->killed, 1);
 -	if (chan->fence)
 -		nouveau_fence_context_kill(chan->fence, -ENODEV);
-+	smp_mb(); /* pairs with the barrier in nouveau_fence_context_arm() */
-+
 +	/*
-+	 * Only touch the fence context once nouveau_fence_context_arm() has
-+	 * declared it usable.  See the comment there for why chan->fence
-+	 * being non-NULL is not enough, and for the barrier pairing.
++	 * atomic_set() and atomic_read() carry no ordering of their own
++	 * (Documentation/atomic_t.txt), and this is the one direction the
++	 * CPU does not provide either: without the barrier the store above
++	 * may still be buffered while the load below reads ->ready, and
++	 * nouveau_fence_context_arm() may miss chan->killed at the same
++	 * time, so neither side kills the context.
 +	 */
++	smp_mb();
++
 +	fctx = READ_ONCE(chan->fence);
-+	if (fctx && READ_ONCE(fctx->ready))
++	if (fctx && atomic_read(&fctx->ready))
 +		nouveau_fence_context_kill(fctx, -ENODEV);
  }
  
  static int
-@@ -487,7 +497,12 @@
+@@ -487,7 +500,12 @@
  	}
  
  	/* initialise synchronisation */
@@ -38,34 +41,38 @@
  int
 --- a/drivers/gpu/drm/nouveau/nouveau_fence.c
 +++ b/drivers/gpu/drm/nouveau/nouveau_fence.c
-@@ -93,6 +93,33 @@
+@@ -93,6 +93,37 @@
  	spin_unlock_irqrestore(&fctx->lock, flags);
  }
  
 +/*
-+ * Publish a freshly built fence context to nouveau_channel_kill().
++ * Declare a finished fence context killable.
 + *
-+ * A channel is schedulable, and the kill event is armed, well before its
-+ * fence context exists, so a kill can land while this function's caller is
-+ * still building one.  The two sides agree through fctx->ready and
-+ * chan->killed: each stores its own flag, issues a full barrier, then loads
-+ * the other's.  Store-buffer ordering guarantees that at least one of them
-+ * observes the other, so the kill is never lost.  Both observing it is fine,
-+ * nouveau_fence_context_kill() is idempotent.
++ * A channel is schedulable, and its kill event armed, before its fence
++ * context exists, so a kill can arrive while the caller is still building
++ * one.  This and nouveau_channel_kill() hand over through chan->killed and
++ * fctx->ready: each stores its own flag before loading the other's, so at
++ * least one of them observes the other and the kill is not lost.  Both
++ * observing it is harmless, nouveau_fence_context_kill() only walks a list
++ * the first caller has already emptied.
 + *
-+ * fctx->ready cannot be replaced by a test of chan->fence: the fence
-+ * backends publish that pointer before nouveau_fence_context_new()
-+ * initialises fctx->lock, so it goes non-NULL while the context is still
-+ * unusable.
++ * fctx->lock is held across the handover so that a kill arriving in the
++ * middle of it waits in nouveau_fence_context_kill(), which takes the same
++ * lock, instead of walking a context that is not finished.
 + */
 +void
 +nouveau_fence_context_arm(struct nouveau_channel *chan)
 +{
 +	struct nouveau_fence_chan *fctx = chan->fence;
++	unsigned long flags;
++	bool killed;
 +
-+	WRITE_ONCE(fctx->ready, 1);
-+	smp_mb(); /* pairs with the barrier in nouveau_channel_kill() */
-+	if (atomic_read(&chan->killed))
++	spin_lock_irqsave(&fctx->lock, flags);
++	killed = atomic_read(&chan->killed);
++	atomic_set(&fctx->ready, 1);
++	spin_unlock_irqrestore(&fctx->lock, flags);
++
++	if (killed)
 +		nouveau_fence_context_kill(fctx, -ENODEV);
 +}
 +
@@ -74,22 +81,21 @@
  {
 --- a/drivers/gpu/drm/nouveau/nouveau_fence.h
 +++ b/drivers/gpu/drm/nouveau/nouveau_fence.h
-@@ -53,6 +53,14 @@
+@@ -53,6 +53,13 @@
  	struct work_struct uevent_work;
  	struct nvif_event event;
  	int notify_ref, dead, killed;
 +
 +	/*
-+	 * Set once the context is fully built and may be killed.  Written
-+	 * by nouveau_fence_context_arm(), read by nouveau_channel_kill();
-+	 * both sides carry an smp_mb() so a kill arriving during init is
-+	 * seen by at least one of them.
++	 * Set by nouveau_fence_context_arm() once the context is complete
++	 * and may be killed.  nouveau_channel_kill() must not touch a
++	 * context before that.
 +	 */
-+	int ready;
++	atomic_t ready;
  };
  
  struct nouveau_fence_priv {
-@@ -71,6 +79,7 @@
+@@ -71,6 +78,7 @@
  void nouveau_fence_context_del(struct nouveau_fence_chan *);
  void nouveau_fence_context_free(struct nouveau_fence_chan *);
  void nouveau_fence_context_kill(struct nouveau_fence_chan *, int error);
