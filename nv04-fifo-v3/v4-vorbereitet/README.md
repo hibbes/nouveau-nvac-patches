@@ -9,7 +9,7 @@ Stand 21.08.2026, 04:00. Serie neu aufgebaut im Arbeitsbaum
 |---|---|---|
 | 1/4 unsubscribe kill-event | **Reviewed-by Lyude**, 15:10 -0400 | unveraendert, Tag nachgetragen |
 | 2/4 fence-context-Handschlag | Entwurfsvorschlag Lyude, 16:01 -0400 | **neu gebaut** |
-| 3/4 CACHE_ERROR-Filter | drei Umbauwuensche, 17:07 -0400 | umgebaut, plus `(benign)` |
+| 3/4 CACHE_ERROR-Filter | drei Umbauwuensche, 15:21 -0400 | umgebaut, plus `(benign)` |
 | 4/4 kill-events auf NV50+ | **Rueckfrage Lyude, 17:56 -0400** | **offen, siehe unten** |
 
 ## 2/4: zweimal korrigiert, beide Male gegen mich selbst
@@ -61,8 +61,26 @@ Es sind also zwei Schrankenpaare mit zwei verschiedenen Aufgaben:
 
 ## 3/4
 
-Alle drei Wuensche umgesetzt (`subc`/`addr`/`name` vorab, Kommentar zum
-Mesa-Probe, Debug- statt Fehlerstufe). Zusaetzlich traegt die Debug-Zeile jetzt
+**Korrektur meiner eigenen Beschreibung.** Ein frueherer Stand nannte als
+Lyudes drei Wuensche "subc/addr/name vorab, Kommentar zum Mesa-Probe,
+Debug- statt Fehlerstufe". Falsch: Kommentar und Debug-Stufe waren in der
+v3 schon drin. Seine drei Wuensche sind woertlich:
+
+1. "keep the print of the channel name even when demoting this to debug"
+2. "move the nvkm_chan_get_chid(...) call and nvkm_chan_put(...) call out
+   of the conditional"
+3. "move all of the printf arguments into their own local variables"
+
+Zu 2. gehoert eine Klarstellung, weil es beim Nachlesen zunaechst wie ein
+Versaeumnis aussah: gemeint ist die **innere** Bedingung. In der v3 lagen
+`get_chid`/`put` im `else`-Zweig des Benign-Tests, weshalb die Debug-Zeile
+keinen Kanalnamen hatte. Sie stehen jetzt vor dem `if`/`else`
+beziehungsweise dahinter. Aus der aeusseren Bedingung
+(`if (!(pull0 ...) || !nv04_fifo_swmthd(...))`) herauszuziehen war nicht
+gemeint und waere auch falsch, das wuerde bei jedem CACHE_ERROR eine
+Kanalreferenz nehmen.
+
+Alle drei sind umgesetzt. Zusaetzlich traegt die Debug-Zeile jetzt
 `(benign)`, damit die beiden Formatzeichenketten nicht identisch sind.
 Belegt statt vermutet: `nvkm_debug` ist von der 100-Spalten-Pruefung
 ausgenommen, `nvkm_error` nicht (`checkpatch.pl` `$logFunctions` kennt `err`,
@@ -118,3 +136,44 @@ auf "The last patch in this series subscribes Tesla channels as well".
   aufgerufen (`nouveau_chan.c:516`), `arm()` steht in :520 direkt dahinter,
   und `nouveau_channel_init()` hat genau einen Aufrufer. Es gibt keinen Weg,
   auf dem ein Fence-Kontext unbewaffnet bleibt.
+
+## Nachtrag 07:45: Abgleich mit ALLEN Lyude-Mails
+
+Auf Wunsch alle 16 Lyude-Mails gelesen, auch ausserhalb des v3-Fadens. Zwei
+Befunde, die die v4 betreffen, standen nicht im Fifo-Faden:
+
+**"this is way too verbose"** (18.08., zur Spur-1-v4 2/2). Das ist das
+"to verbose", an das die Erinnerung hing. Es galt einem neunzeiligen
+Kommentarblock. Unser neues 2/4 hatte 28 Kommentarzeilen auf 30 Zeilen Code
+und haette denselben Einwand geerntet. Gekuerzt auf 14, je Schranke ein
+Einzeiler, das Warum steht in der Commit-Botschaft. checkpatch verlangt an
+jeder Schranke einen Kommentar, ein Sammelkommentar reicht nicht (empirisch
+geprueft, nicht angenommen).
+
+**"nah - this isn't an issue"** (20.08. 18:36, Teardown-Faden). Lyude
+schliesst den `hpd_work`-Punkt selbst: "So long as the connector IRQs are
+blocked at that point, it should be good. MST connectors aren't, but that's
+also fine - they use the IRQ notify thingies of the non-MST connectors, so
+they're indirectly blocked by that." Zehn Minuten zuvor hatten sie noch
+angeboten, selbst einen Patch zu schicken. Der Punkt stand bei uns als offen
+und ist erledigt.
+
+Weiteres, ohne Handlungsbedarf fuer die v4:
+
+- "In the future you should probably put a backtrace if you've seen this in
+  the wild" (Spur-1-v4 2/2). Fuer die Fifo-Serie gibt es keinen Oops, das
+  Anschreiben zitiert stattdessen den Injektionslauf.
+- "this isn't the bug, the bug is that we're reading nv_encoder->crtc at all
+  here" (Spur-1-v4 2/2), gefolgt von der eigenen 6-Patch-Serie. Erledigt.
+- "We don't set nv_encoder->crtc at the boot-time hardware state readback"
+  wurde 108 Minuten spaeter selbst zurueckgenommen: "...this was wrong,
+  oops!"
+- Lyudes eigene v1 4/6 traegt `Reported-by: Marek Czernohous`.
+- Vier reine `Reviewed-by` (Teardown 2/3 und 3/3, Spur-1-v4 1/2,
+  fence-uevent-v2), letzteres mit "Will push to drm-misc-next-fixes",
+  13 Minuten spaeter korrigiert auf drm-misc-next.
+
+Nichts in den Mails widerspricht der v4.
+
+**Anrede:** in keiner Mail und in keiner Signatur steht eine Pronomenangabe.
+Ohne Beleg wird they/them verwendet.

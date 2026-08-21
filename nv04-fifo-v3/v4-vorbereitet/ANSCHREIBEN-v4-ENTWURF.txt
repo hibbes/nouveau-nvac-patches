@@ -19,8 +19,11 @@ Thank you for the review. Changes since v3:
     is logged at debug level instead of error. The debug line now says
     "(benign)" so the two format strings are not identical.
 
-4/4 unchanged in code. Lyude asked what testing this has had on Tesla; that
-    is answered under Testing below rather than in the commit message.
+4/4 unchanged in code. Lyude asked what testing this has had on Tesla and
+    said it will need input from others; the testing question is answered
+    under Testing below. It is last in the series so it can be dropped
+    without disturbing the two fixes, and I am happy for it to wait for
+    that input rather than go with them.
 
 On 2/4, and the two places where it differs from the sketch
 
@@ -49,6 +52,15 @@ On 2/4, and the two places where it differs from the sketch
 
   The idea is Lyude's and the patch says so. I would rather be told I have
   the memory model wrong than quietly ship a handshake that drops kills.
+
+  On the last line of that review
+
+  The advice is right, and I would rather say so than let it pass. The
+  constraint here is that the machine I am debugging is the machine that
+  freezes, it is the only one I have with this chip, and a wedge ends the
+  session, so the work happens in fragments between reboots. Without the
+  assistance I would not have been hunting these bugs at all. The trailer
+  stays because it is an accurate account of how the series was produced.
 
 Testing
 

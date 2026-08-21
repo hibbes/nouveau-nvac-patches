@@ -1,6 +1,6 @@
-From f00dd1016d2a83df13f70fb019a16276b6f51314 Mon Sep 17 00:00:00 2001
+From 4f844ef53923c0fd681c29d27f18c86de5ab24f2 Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
-Date: Fri, 21 Aug 2026 06:48:36 +0200
+Date: Fri, 21 Aug 2026 07:37:20 +0200
 Subject: [PATCH v4 3/4] drm/nouveau/fifo/nv04: filter benign CACHE_ERROR from
  Mesa NV50 bind probe
 

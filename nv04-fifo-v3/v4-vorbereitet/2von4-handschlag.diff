@@ -1,8 +1,8 @@
 diff --git a/drivers/gpu/drm/nouveau/nouveau_chan.c b/drivers/gpu/drm/nouveau/nouveau_chan.c
-index f142f6310596..ef1cdc132a0b 100644
+index f142f6310596..605ce74c0d15 100644
 --- a/drivers/gpu/drm/nouveau/nouveau_chan.c
 +++ b/drivers/gpu/drm/nouveau/nouveau_chan.c
-@@ -43,9 +43,28 @@ module_param_named(vram_pushbuf, nouveau_vram_pushbuf, int, 0400);
+@@ -43,9 +43,17 @@ module_param_named(vram_pushbuf, nouveau_vram_pushbuf, int, 0400);
  void
  nouveau_channel_kill(struct nouveau_channel *chan)
  {
@@ -12,28 +12,17 @@ index f142f6310596..ef1cdc132a0b 100644
 -	if (chan->fence)
 -		nouveau_fence_context_kill(chan->fence, -ENODEV);
 +
-+	/*
-+	 * Pairs with the smp_mb() in nouveau_fence_context_arm().  Both
-+	 * sides store their own flag before loading the other's, so at
-+	 * least one of them observes the other and the kill is not lost.
-+	 */
++	/* Pairs with the smp_mb() in nouveau_fence_context_arm(). */
 +	smp_mb();
 +
 +	fctx = READ_ONCE(chan->fence);
-+	if (!fctx)
-+		return;
-+
-+	/*
-+	 * Pairs with the smp_store_release() in
-+	 * nouveau_fence_context_arm(): a context that reports itself ready
-+	 * has had its lock and its pending list initialised.
-+	 */
-+	if (smp_load_acquire(&fctx->ready))
++	/* Pairs with the smp_store_release() there. */
++	if (fctx && smp_load_acquire(&fctx->ready))
 +		nouveau_fence_context_kill(fctx, -ENODEV);
  }
  
  static int
-@@ -494,7 +513,12 @@ nouveau_channel_init(struct nouveau_channel *chan, u32 vram, u32 gart)
+@@ -494,7 +502,12 @@ nouveau_channel_init(struct nouveau_channel *chan, u32 vram, u32 gart)
  	}
  
  	/* initialise synchronisation */
@@ -48,42 +37,26 @@ index f142f6310596..ef1cdc132a0b 100644
  
  int
 diff --git a/drivers/gpu/drm/nouveau/nouveau_fence.c b/drivers/gpu/drm/nouveau/nouveau_fence.c
-index edbe9e08ba0f..55c55239bd19 100644
+index edbe9e08ba0f..5bd5623b2a1e 100644
 --- a/drivers/gpu/drm/nouveau/nouveau_fence.c
 +++ b/drivers/gpu/drm/nouveau/nouveau_fence.c
-@@ -93,6 +93,41 @@ nouveau_fence_context_kill(struct nouveau_fence_chan *fctx, int error)
+@@ -93,6 +93,25 @@ nouveau_fence_context_kill(struct nouveau_fence_chan *fctx, int error)
  	spin_unlock_irqrestore(&fctx->lock, flags);
  }
  
 +/*
-+ * Declare a finished fence context killable.
-+ *
-+ * A channel is schedulable, and its kill event armed, before its fence
-+ * context exists, so a kill can arrive while the caller is still building
-+ * one.  This and nouveau_channel_kill() hand over through fctx->ready and
-+ * chan->killed.
++ * Declare a finished fence context killable.  A kill can arrive while the
++ * caller is still building the context, so this and nouveau_channel_kill()
++ * hand over through fctx->ready and chan->killed.
 + */
 +void
 +nouveau_fence_context_arm(struct nouveau_channel *chan)
 +{
 +	struct nouveau_fence_chan *fctx = chan->fence;
 +
-+	/*
-+	 * Publish the finished context.  chan->fence is assigned by the
-+	 * allocation, before nouveau_fence_context_new() initialises
-+	 * fctx->lock, so nouveau_channel_kill() must not reach that lock
-+	 * until this store is visible; it reads ->ready with acquire.
-+	 */
++	/* Pairs with the smp_load_acquire() in nouveau_channel_kill(). */
 +	smp_store_release(&fctx->ready, true);
-+
-+	/*
-+	 * Pairs with the smp_mb() in nouveau_channel_kill().  Storing
-+	 * ->ready before loading chan->killed is what makes the handover
-+	 * work: a barrier orders accesses, it does not reorder them, so
-+	 * this store has to precede this load in program order too.  Both
-+	 * sides killing the context is harmless, the second caller walks a
-+	 * list the first has already emptied.
-+	 */
++	/* Pairs with the smp_mb() there; this store precedes that load. */
 +	smp_mb();
 +
 +	if (atomic_read(&chan->killed))
@@ -94,25 +67,24 @@ index edbe9e08ba0f..55c55239bd19 100644
  nouveau_fence_context_del(struct nouveau_fence_chan *fctx)
  {
 diff --git a/drivers/gpu/drm/nouveau/nouveau_fence.h b/drivers/gpu/drm/nouveau/nouveau_fence.h
-index 183dd43ecfff..5ecfca7296e8 100644
+index 183dd43ecfff..d9fede5dcba6 100644
 --- a/drivers/gpu/drm/nouveau/nouveau_fence.h
 +++ b/drivers/gpu/drm/nouveau/nouveau_fence.h
-@@ -53,6 +53,14 @@ struct nouveau_fence_chan {
+@@ -53,6 +53,13 @@ struct nouveau_fence_chan {
  	struct work_struct uevent_work;
  	struct nvif_event event;
  	int notify_ref, dead, killed;
 +
 +	/*
-+	 * Set by nouveau_fence_context_arm() once the context is complete
-+	 * and may be killed.  Deliberately not guarded by fctx->lock:
-+	 * nouveau_channel_kill() has to test it before it is allowed to
-+	 * touch that lock at all.
++	 * Set by nouveau_fence_context_arm() once the context is complete.
++	 * Read without fctx->lock, which nouveau_channel_kill() may not
++	 * touch until it is set.
 +	 */
 +	bool ready;
  };
  
  struct nouveau_fence_priv {
-@@ -71,6 +79,7 @@ void nouveau_fence_context_new(struct nouveau_channel *, struct nouveau_fence_ch
+@@ -71,6 +78,7 @@ void nouveau_fence_context_new(struct nouveau_channel *, struct nouveau_fence_ch
  void nouveau_fence_context_del(struct nouveau_fence_chan *);
  void nouveau_fence_context_free(struct nouveau_fence_chan *);
  void nouveau_fence_context_kill(struct nouveau_fence_chan *, int error);
