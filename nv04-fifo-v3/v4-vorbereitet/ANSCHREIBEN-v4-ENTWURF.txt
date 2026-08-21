@@ -24,14 +24,15 @@ Withdrawn since v3
   v3 carried a patch that demoted one specific CACHE_ERROR to debug level
   and attributed it to a Mesa bind probe. I am withdrawing it, because that
   attribution does not survive a look at the tree. Method 0x0060 on this
-  class is SET_CONTEXT_DMA_SEMAPHORE (nvhw/class/cl826f.h), and the only
-  writers in tree are nv84_fence_emit32() and nv84_fence_sync32(), both on
-  subchannel 0 (nvif/push006c.h). All 99 logged occurrences behind that
-  patch read "subc 0 mthd 0060 data beef0201". The handle value is not from
-  the kernel, it arrives with the channel allocation, but I have not
-  established which userspace component picks it, and I have not
-  established that those two writes are what faults. I will look at it
-  separately rather than carry it here.
+  class is SET_CONTEXT_DMA_SEMAPHORE (nvhw/class/cl826f.h), and the writer
+  is the kernel itself, nv84_fence_emit32() and nv84_fence_sync32(), on
+  subchannel 0 (nvif/push006c.h). The data is the VRAM ctxdma handle that
+  Mesa picks (nouveau_screen.c, .vram = 0xbeef0201) and the kernel binds at
+  channel creation. All 99 logged occurrences behind that patch read
+  "subc 0 mthd 0060 data beef0201". Mesa's NV50 Gallium never writes on
+  subchannel 0. So this is the driver's own semaphore-context rebind being
+  rejected by the puller now and then, and I have not established why. I
+  will look at it separately rather than carry it here.
 
 On 2/3, and the two places where it differs from the sketch
 

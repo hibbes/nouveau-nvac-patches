@@ -24,9 +24,31 @@ Kanals mitgibt (`nouveau_chan.c:416`).
 ## Was NICHT belegt ist
 
 Dass genau diese beiden Schreibvorgaenge die 99 Meldungen erzeugen. Liefen
-sie bei jedem Fence in den Fehler, waeren es Millionen. Ebenso wenig ist
-belegt, welche Userspace-Komponente den Griff `0xbeef0201` waehlt: in
-Mesa 26.1.6 kommt der Wert nicht vor, in `libdrm_nouveau` auch nicht.
+sie bei jedem Fence in den Fehler, waeren es Millionen.
+
+**Korrektur 21.08. nachmittags:** eine fruehere Fassung dieser Datei
+behauptete, `0xbeef0201` komme in Mesa 26.1.6 nicht vor. Das war falsch,
+die lokale Mesa-Kopie war unvollstaendig (nur `src/mesa`). Im Tarball
+steht es: `src/gallium/drivers/nouveau/nouveau_screen.c:299`,
+`.vram = 0xbeef0201, .gart = 0xbeef0202`. Mesa WAEHLT den Griff, reicht
+ihn ueber libdrm durch, der Kernel bindet ihn (`nouveau_chan.c:416`) und
+schreibt ihn selbst in die Methode. Das schliesst die Kette, es schwaecht
+sie nicht.
+
+**Was die Gegenprobe vom Nachmittag ergab:** der Rueckzug war Vorsicht,
+keine Notwendigkeit. Der einzige Fehlerpfad von 0x0060 auf G80+ ist ein
+fehlgeschlagener RAMHT-Lookup, und der Griff steht nachweislich im RAMHT
+(sonst gelaenge kein Fence). Die 99 Zeilen sind also ein sporadischer
+Lookup-Aussetzer auf einen immer vorhandenen Griff. "Kernel ist Schreiber"
+heisst nicht "Kernel ist Verursacher". Der Handler ueberspringt nur das
+eine Wort, die Bindung des vorigen identischen Fence bleibt stehen, was
+erklaert, warum 99 Faelle nie geschadet haben.
+
+**Die entscheidende Messung** sitzt seit 21.08. im 7.2.0-Soakkernel, im
+0x0060-Zweig von nv04.c: pull0 mit HASH_FAILED/HASH_BUSY, und ob der
+Griff im RAMHT des Kanals steht ("0060-probe"). HASH_FAILED plus present
+heisst Puller-Aussetzer, MISSING heisst Treiberfehler. Lokal bleibt 0004
+aktiv, weil 0020 ueber den 0x0060-Zweig die Kill-Staffel freihaelt.
 
 Eine falsche Zuschreibung durch eine zweite zu ersetzen waere schlimmer als
 gar keine. Deshalb steht im Anschreiben nur das Belegte.
