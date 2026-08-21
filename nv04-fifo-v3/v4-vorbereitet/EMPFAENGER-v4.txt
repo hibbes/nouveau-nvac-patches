@@ -1,0 +1,32 @@
+# Empfaenger der v4, Stand 21.08.2026. NOCH NICHT GESENDET.
+#
+# Quelle: scripts/get_maintainer.pl --nogit --nogit-fallback auf 0002 im
+# Serienbaum c21bb4193868. Nicht abgeschrieben, sondern erzeugt.
+
+To: nouveau@lists.freedesktop.org,
+    dri-devel@lists.freedesktop.org
+
+Cc: linux-kernel@vger.kernel.org,
+    Lyude Paul <lyude@redhat.com>,
+    Danilo Krummrich <dakr@kernel.org>,
+    Maarten Lankhorst <maarten.lankhorst@linux.intel.com>,
+    Maxime Ripard <mripard@kernel.org>,
+    Thomas Zimmermann <tzimmermann@suse.de>,
+    David Airlie <airlied@gmail.com>,
+    Simona Vetter <simona@ffwll.ch>,
+    Ben Skeggs <bskeggs@redhat.com>
+
+# Zwei Aenderungen gegenueber der v3:
+#
+# 1. bskeggs@nvidia.com -> bskeggs@redhat.com
+#    Die v3 ging an nvidia.com und kam dreimal als unzustellbar zurueck
+#    ("Die Adresse wurde nicht gefunden", 12.08., je einer pro Patch).
+#    Ben Skeggs hat die v3 also nie gesehen. get_maintainer nennt
+#    redhat.com, und Lyude adressiert ihn in der eigenen Serie ebenso.
+#
+# 2. Die drei drm-misc-Maintainer (Lankhorst, Ripard, Zimmermann) neu
+#    dazu. get_maintainer nennt sie, die v3 hatte sie nicht, Lyude nimmt
+#    sie bei nouveau-Patches mit.
+#
+# stable@vger.kernel.org steht als Cc: im Commit-Text von 1/4 und 2/4 und
+# gehoert NICHT in die Sendeliste: das Tag wirkt erst nach der Aufnahme.
