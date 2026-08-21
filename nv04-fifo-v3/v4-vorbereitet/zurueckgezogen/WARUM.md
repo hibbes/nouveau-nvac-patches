@@ -119,3 +119,17 @@ Treffer erklaert sich selbst, unabhaengig von meiner Hash-Annahme.
 
 Lehre: eine Probe, die ja/nein meldet, muss ihre Annahme mitliefern.
 "MISSING" ohne die Liste der vorhandenen Eintraege war genau das nicht.
+
+## Stand 22.08. nach dem Treffer
+
+- Probe v2 gebaut, installiert, in beiden initramfs (md5 84d03595...).
+  Greift nach dem naechsten Reboot. Bis dahin laeuft v1 weiter, deren
+  Zeile ab jetzt so zu lesen ist: pull0/HASH_FAILED gilt, "ramht" NICHT.
+- gpu-wedge-warner: Zeilen mit "0060-probe" werden nur protokolliert,
+  nicht mehr als fifo-trap gemeldet (Ausnahme vor handle_gpu_trap, Vorbild
+  benigne Mesa-Signatur). Sicherung /root/gpu-wedge-warner.py.bak-20260822-
+  vor-0060probe. Daemon neu gestartet 18:17:55. Klaus schweigt also bei
+  weiteren Treffern; im Log stehen sie.
+- Der --test-scan-Modus des Warners prueft nur den failed-to-idle-Pfad,
+  nicht fifo. Die Ausnahme ist stattdessen direkt gegen die echte Zeile
+  und eine v2-Musterzeile geprueft.
