@@ -1,6 +1,6 @@
-From 6f86c39c528889a13c1ba82113daa1929ef31506 Mon Sep 17 00:00:00 2001
+From a0968b754281ba69525e26e4ae034ebe3727d57b Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
-Date: Fri, 21 Aug 2026 03:48:10 +0200
+Date: Fri, 21 Aug 2026 06:48:34 +0200
 Subject: [PATCH v4 2/4] drm/nouveau: don't kill a fence context that is not
  ready yet
 

@@ -101,3 +101,20 @@ auf "The last patch in this series subscribes Tesla channels as well".
 - Entscheidung: `Assisted-by: Claude:claude-opus-5` stehen lassen? Lyude
   schrieb "consider trying to write the respin without using claude!". Das Tag
   ist die ehrliche Angabe; es zu entfernen waere die Unwahrheit.
+
+## Nachtrag 06:50: zwei empirische Befunde
+
+- **checkpatch verlangt den Parameternamen.** Ich hatte
+  `nouveau_fence_context_arm(struct nouveau_channel *)` an die unbenannten
+  Nachbarn im Header angeglichen. checkpatch meldet daraufhin "function
+  definition argument [...] should also have an identifier name". Die
+  Nachbarn sind Altbestand, den checkpatch nicht prueft. Zurueckgenommen,
+  die benannte Form bleibt.
+- **Uebersetzung belegt**: `nouveau_chan.o`, `nouveau_fence.o` und
+  `nvkm/engine/fifo/nv04.o` mit `W=1` ohne jede Warnung, dazu ein voller
+  `make drivers/gpu/drm/nouveau/` mit `rc=0` (773 Objekte, `nouveau.o`
+  gelinkt). Diesmal wirklich mit `W=1`, nicht nur behauptet.
+- **Vollstaendigkeit geprueft**: `->context_new` wird nur an einer Stelle
+  aufgerufen (`nouveau_chan.c:516`), `arm()` steht in :520 direkt dahinter,
+  und `nouveau_channel_init()` hat genau einen Aufrufer. Es gibt keinen Weg,
+  auf dem ein Fence-Kontext unbewaffnet bleibt.
