@@ -1,4 +1,4 @@
-Subject: [PATCH v4 0/4] drm/nouveau: channel-kill event ordering fixes, and lower the gate to NV50
+Subject: [PATCH v4 0/3] drm/nouveau: channel-kill event ordering fixes, and lower the gate to NV50
 
 This is v4. v3 is here:
 
@@ -6,27 +6,38 @@ This is v4. v3 is here:
 
 Thank you for the review. Changes since v3:
 
-1/4 unchanged, and now carries Lyude's Reviewed-by.
+1/3 unchanged, and now carries Lyude's Reviewed-by.
 
-2/4 rewritten. v3 moved the subscription behind context_new(), which traded
+2/3 rewritten. v3 moved the subscription behind context_new(), which traded
     a half-built fence context for a missed kill. Lyude pointed out that the
     subscription does not have to move at all: give the fence context a flag
     and have the two sides hand the kill over. That is what this version
     does, and it is the better fix, because the kill is no longer lost.
 
-3/4 restructured as requested: the debug line keeps the channel name, the
-    channel lookup and release moved out of the inner conditional so both
-    branches have it, and the format arguments are in local variables. The
-    debug line also says "(benign)" now, so the two format strings are not
-    identical.
+3/3 is v3's 4/4, unchanged in code. Lyude asked what testing this has had
+    on Tesla and said it will need input from others; the testing question
+    is answered under Testing below. It is last in the series so it can be
+    dropped without disturbing the two fixes, and I am happy for it to wait
+    for that input rather than go with them.
 
-4/4 unchanged in code. Lyude asked what testing this has had on Tesla and
-    said it will need input from others; the testing question is answered
-    under Testing below. It is last in the series so it can be dropped
-    without disturbing the two fixes, and I am happy for it to wait for
-    that input rather than go with them.
+Withdrawn since v3
 
-On 2/4, and the two places where it differs from the sketch
+  v3 carried a patch that demoted one specific CACHE_ERROR to debug level
+  and attributed it to a Mesa bind probe. I am withdrawing it, because that
+  attribution does not survive a look at the tree. Method 0x0060 on this
+  class is SET_CONTEXT_DMA_SEMAPHORE (nvhw/class/cl826f.h), and the only
+  writers in tree are nv84_fence_emit32() and nv84_fence_sync32(), both on
+  subchannel 0 (nvif/push006c.h). All 99 logged occurrences behind that
+  patch read "subc 0 mthd 0060 data beef0201". The handle value is not from
+  the kernel, it arrives with the channel allocation, but I have not
+  established which userspace component picks it, and I have not
+  established that those two writes are what faults.
+
+  What I am sure of is that I should not demote an error the driver raises
+  about its own pushbuf while the cause is open. I will look at it
+  separately rather than carry it here.
+
+On 2/3, and the two places where it differs from the sketch
 
   Both differences follow from the same detail, and I want to state them
   openly rather than let them be found in the diff.
@@ -71,7 +82,7 @@ Testing
   module compiles and links with W=1 and no new warnings. checkpatch.pl
   --strict is clean on all four patches.
 
-  Deliberate channel kills on Tesla, which is Lyude's question on 4/4.
+  Deliberate channel kills on Tesla, which is Lyude's question on 3/3.
 
   The kill path on this hardware has been exercised on purpose, not only
   observed, and under a real 3D workload. A local debug patch, which is not
@@ -90,15 +101,15 @@ Testing
     nouveau 0000:02:00.0: Xwayland[242990]: channel 5 killed!
     supertuxkart[1181685]: segfault at 560800000000 ip 00007f617c0d5ba6 [...] in libgallium
 
-  So on NVAC, with 4/4 in place, the ERRORED event is delivered, the handler
+  So on NVAC, with 3/3 in place, the ERRORED event is delivered, the handler
   runs, and the fence context is killed.
 
   One oddity in that output which I cannot explain and am not fixing here:
   the kill message names Xwayland, while the nvkm side names supertuxkart
   for the same channel. nouveau_channel_killed() prints chan->cli->name, so
   the DRM client that owns the channel is not the process the fifo layer
-  sees. I have seen it twice, on 2026-08-06 and here, and it is orthogonal
-  to this series.
+  sees. I have seen it on four of the eight channel kills this machine has
+  logged, the first on 2026-07-25, and it is orthogonal to this series.
 
   The compositor survived it. labwc kept the same pid across the kill and so
   did Xwayland, only the victim died, and the desktop stayed usable. That
@@ -120,18 +131,17 @@ Testing
   it is the kind of thing worth disagreeing with.
 
   Games and sustained 3D. glxgears without vsync for ten minutes, and
-  SuperTuxKart for a full race, ten and a half minutes, both with 4/4 in
+  SuperTuxKart for a full race, ten and a half minutes, both with 3/3 in
   place. In both runs everything the kernel said came at window creation
   and was the known benign gr DATA_ERROR trap: 71 of those for glxgears,
-  three for SuperTuxKart, and none at all once either was running. No
-  wedge, no unexpected kill, no CACHE_ERROR at error level, and the
-  session came through both unchanged.
+  three for SuperTuxKart, and none at all once either was running. No wedge, no
+  unexpected kill, and the session came through both unchanged.
 
-  Soak. Code equivalent to 1/4, 3/4 and 4/4 has been running on this machine
+  Soak. Code equivalent to 1/3 and 3/3 has been running on this machine
   since 2026-07-25, across the kernel bumps 7.1.5 through 7.1.8, with no
   regression.
 
-  The 2/4 in this posting has NOT been soaked. What has been running since
+  The 2/3 in this posting has NOT been soaked. What has been running since
   2026-08-06 is the v3 form of it, which moved the subscription; the
   handover in this version is new as of today. I will report back once it
   has run, and I would rather say this than let the v3 sentence stand.
@@ -142,12 +152,5 @@ Testing
   misbehave in daily use. It is not an independent demonstration of the
   failure modes above.
 
-  1/4 and 2/4 are ordering fixes for windows I have not managed to hit
+  1/3 and 2/3 are ordering fixes for windows I have not managed to hit
   deliberately; the reasoning is from the source.
-
-  3/4 filters a benign CACHE_ERROR that Mesa's NV50 bind probe triggers. The
-  logs behind it are from a second, independent MCP79/MCP7A machine, not
-  mine: 99 occurrences across three logs and two kernel versions, under Xorg
-  and Wayland. They were shared with me by the tester who reported the
-  original NVAC issue. I have added no Reported-by or Tested-by because we
-  have not been in touch since and I have nobody's consent to point at.

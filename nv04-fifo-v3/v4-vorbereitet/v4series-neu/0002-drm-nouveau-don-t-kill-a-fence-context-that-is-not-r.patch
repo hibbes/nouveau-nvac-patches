@@ -1,7 +1,7 @@
-From 9f9539cf0621d4027aac8f36706ba701df382c17 Mon Sep 17 00:00:00 2001
+From 06eb5fcd7e6c2ea853a3d2bf1b33636d7b2649a8 Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
-Date: Fri, 21 Aug 2026 10:28:11 +0200
-Subject: [PATCH v4 2/4] drm/nouveau: don't kill a fence context that is not
+Date: Fri, 21 Aug 2026 12:31:31 +0200
+Subject: [PATCH v4 2/3] drm/nouveau: don't kill a fence context that is not
  ready yet
 
 nouveau_channel_init() arms the channel-kill subscription early, right
