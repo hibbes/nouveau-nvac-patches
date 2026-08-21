@@ -1,0 +1,65 @@
+drm/nouveau: don't kill a fence context that is not ready yet
+
+nouveau_channel_init() arms the channel-kill subscription early, right
+after mapping userd, and only creates the fence context at the very end
+of the same function. The handler it installs, nouveau_channel_killed(),
+reaches nouveau_fence_context_kill(chan->fence).
+
+The NULL check in nouveau_channel_kill() does not cover the window in
+between. Every backend that can reach it publishes the pointer before the
+context is usable:
+
+	fctx = chan->fence = kzalloc_obj(*fctx);
+	if (!fctx)
+		return -ENOMEM;
+
+	nouveau_fence_context_new(chan, &fctx->base);
+
+and nouveau_fence_context_new() is what runs spin_lock_init(&fctx->lock)
+and INIT_LIST_HEAD(&fctx->pending). An event arriving after the
+assignment but before that call finds chan->fence non-NULL and unusable:
+nouveau_fence_context_kill() takes a lock that was never initialised and
+walks a list head whose next pointer is still the NULL left by kzalloc().
+
+Hand the kill over through a second pointer that only
+nouveau_fence_context_arm() writes, once nouveau_channel_init() has
+finished building the context. nouveau_channel_kill() reads that pointer
+with acquire and touches the context only through it, so it never sees
+the context before the store that published it, and nothing the backends
+do with chan->fence in the meantime is visible to it. A kill arriving
+while the context is still being built is no longer lost either: it is
+recorded in chan->killed, and nouveau_fence_context_arm() acts on it as
+soon as there is a context to kill.
+
+The two sides hand over rather than exclude each other, because the kill
+side must not touch fctx->lock at all before the context is built, which
+is the very bug being fixed. Each stores its own flag before it loads
+the other's, with smp_mb() on both sides, so at least one of them
+observes the other; this is the store-buffering pattern of
+tools/memory-model/litmus-tests/SB+fencembonceonces.litmus. Both
+observing it is harmless: nouveau_fence_context_kill() then walks a list
+the first caller has already emptied.
+
+This does not close the other window. A kill delivered before
+nouveau_channel_init() subscribes is still not observed at all, and
+nvkm_uchan_init() makes the channel schedulable before that point.
+Closing that one means subscribing before the channel becomes
+schedulable, which is a larger change than this fix.
+
+The approach is Lyude Paul's suggestion, implemented with two
+differences from the sketch. The sketch checks chan->killed before
+setting the ready mark; both sides have to store their own flag before
+loading the other's, or one interleaving loses the kill even under
+sequential consistency, so the order is swapped. And the sketch keeps
+the mark inside the fence context; the first version of this patch did
+too, and the Sashiko review bot pointed out that chan->fence itself is
+published with a plain store, so an acquire on a field behind it does
+not order the allocator's zeroing. Keeping the mark in the channel,
+written only by nouveau_fence_context_arm(), removes that dependency
+and the ready field with it.
+
+Fixes: ea13e5abf807 ("drm/nouveau: signal pending fences when channel has been killed")
+Cc: stable@vger.kernel.org
+Suggested-by: Lyude Paul <lyude@redhat.com>
+Assisted-by: Claude:claude-opus-5
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
