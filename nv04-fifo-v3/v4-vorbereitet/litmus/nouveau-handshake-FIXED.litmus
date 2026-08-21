@@ -1,0 +1,31 @@
+C nouveau-handshake-FIXED
+
+(*
+ * The same handover with the two accesses in arm() swapped and a
+ * barrier added there, i.e. each side stores its own flag before it
+ * loads the other's.  This is then literally
+ * tools/memory-model/litmus-tests/SB+fencembonceonces.litmus,
+ * whose documented result is Never.
+ *)
+
+{}
+
+P0(int *x, int *y)
+{
+	int r0;
+
+	WRITE_ONCE(*x, 1);
+	smp_mb();
+	r0 = READ_ONCE(*y);
+}
+
+P1(int *x, int *y)
+{
+	int r1;
+
+	WRITE_ONCE(*y, 1);
+	smp_mb();
+	r1 = READ_ONCE(*x);
+}
+
+exists (0:r0=0 /\ 1:r1=0)

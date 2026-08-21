@@ -1,0 +1,6 @@
+  DESCEND objtool
+  DESCEND bpf/resolve_btfids
+  INSTALL libsubcmd_headers
+  CC [M]  drivers/gpu/drm/nouveau/nouveau_chan.o
+  CC [M]  drivers/gpu/drm/nouveau/nouveau_fence.o
+  CC [M]  drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.o
