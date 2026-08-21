@@ -8,67 +8,68 @@ Thank you for the review. Changes since v3:
 
 1/3 unchanged, and now carries Lyude's Reviewed-by.
 
-2/3 rewritten. v3 moved the subscription behind context_new(), which traded
-    a half-built fence context for a missed kill. Lyude pointed out that the
-    subscription does not have to move at all: give the fence context a flag
-    and have the two sides hand the kill over.
+2/3 rewritten. v3 moved the subscription behind context_new(), which
+    traded a half-built fence context for a missed kill. Lyude pointed out
+    that the subscription does not have to move at all: give the fence
+    context a flag and have the two sides hand the kill over.
 
 3/3 is v3's 4/4, unchanged in code. Lyude asked what testing this has had
     on Tesla and said it will need input from others; the testing question
     is answered under Testing below. It is last in the series so it can be
-    dropped without disturbing the two fixes, and I am happy for it to wait
-    for that input rather than go with them.
+    dropped without disturbing the two fixes, and I am happy for it to
+    wait for that input rather than go with them.
 
 Withdrawn since v3
 
-  v3 carried a patch that demoted one specific CACHE_ERROR to debug level
-  and attributed it to a Mesa bind probe. I am withdrawing it, because that
-  attribution does not survive a look at the tree. Method 0x0060 on this
-  class is SET_CONTEXT_DMA_SEMAPHORE (nvhw/class/cl826f.h), and the writer
-  is the kernel itself, nv84_fence_emit32() and nv84_fence_sync32(), on
-  subchannel 0 (nvif/push006c.h). The data is the VRAM ctxdma handle that
-  Mesa picks (nouveau_screen.c, .vram = 0xbeef0201) and the kernel binds at
-  channel creation. All 99 logged occurrences behind that patch read
-  "subc 0 mthd 0060 data beef0201". Mesa's NV50 Gallium never writes on
-  subchannel 0. So this is the driver's own semaphore-context rebind being
-  rejected by the puller now and then, and I have not established why. I
-  will look at it separately rather than carry it here.
+  v3 carried a patch that demoted one specific CACHE_ERROR to debug
+  level and attributed it to a Mesa bind probe. I am withdrawing it,
+  because that attribution does not survive a look at the tree. Method
+  0x0060 on this class is SET_CONTEXT_DMA_SEMAPHORE
+  (nvhw/class/cl826f.h), and the writer is the kernel itself,
+  nv84_fence_emit32() and nv84_fence_sync32(), on subchannel 0
+  (nvif/push006c.h). The data is the VRAM ctxdma handle that Mesa picks
+  (nouveau_screen.c, .vram = 0xbeef0201) and the kernel binds at channel
+  creation. All 99 logged occurrences behind that patch read "subc 0
+  mthd 0060 data beef0201". Mesa's NV50 Gallium never writes on
+  subchannel 0. So this is the driver's own semaphore-context rebind
+  being rejected by the puller now and then, and I have not established
+  why. I will look at it separately rather than carry it here.
 
 On 2/3, and the two places where it differs from the sketch
 
-  The sketch checks chan->killed before setting ->ready, but each side has
-  to store its own flag before loading the other's, or one interleaving
-  loses the kill even under sequential consistency; swapped, with smp_mb()
-  on both sides, it is the store-buffering pattern. And the kill side
-  cannot take fctx->lock, because that lock is exactly what must not be
-  touched before the context is built, so ->ready is a plain bool read
-  outside the lock, published with release and read with acquire. The
-  commit message has the full argument.
+  The sketch checks chan->killed before setting ->ready, but each side
+  has to store its own flag before loading the other's, or one
+  interleaving loses the kill even under sequential consistency;
+  swapped, with smp_mb() on both sides, it is the store-buffering
+  pattern. And the kill side cannot take fctx->lock, because that lock
+  is exactly what must not be touched before the context is built, so
+  ->ready is a plain bool read outside the lock, published with release
+  and read with acquire. The commit message has the full argument.
 
 On the aside about writing the respin without Claude
 
   This work is AI assisted, as the Assisted-by trailers say.
 
   The advice is right, and I would rather say so than let it pass. The
-  honest position, though, is that I doubt I would have got to these bugs
-  at all without the assistance.
+  honest position, though, is that I doubt I would have got to these
+  bugs at all without the assistance.
 
 Testing
 
   Reference hardware: Apple Mac mini Late 2009, MCP79 / GeForce 9400M
   (NVAC), Core 2 Duo, Wayland (labwc).
 
-  Build. Built against the stated base commit c21bb4193868. The nouveau
-  module compiles and links with W=1 and no new warnings. checkpatch.pl
-  --strict is clean on all three patches.
+  Build. Built against the base commit named at the end of this mail.
+  The nouveau module compiles and links with W=1 and no new warnings.
+  checkpatch.pl --strict is clean on all three patches.
 
   Deliberate channel kills on Tesla, which is Lyude's question on 3/3.
 
   The kill path on this hardware has been exercised on purpose, not only
-  observed, and under a real 3D workload. A local debug patch, which is not
-  part of this series, synthesises a CACHE_ERROR on a nominated channel.
-  The victim was SuperTuxKart, with its channel live under load. Verbatim,
-  timestamps and unrelated lines elided:
+  observed, and under a real 3D workload. A local debug patch, which is
+  not part of this series, synthesises a CACHE_ERROR on a nominated
+  channel. The victim was SuperTuxKart, with its channel live under
+  load. Verbatim, timestamps and unrelated lines elided:
 
     nouveau 0000:02:00.0: fifo: inject:   ch   2 [labwc[5670]] errored 0
     nouveau 0000:02:00.0: fifo: inject:   ch   3 [labwc[5670]] errored 0
@@ -81,35 +82,38 @@ Testing
     nouveau 0000:02:00.0: Xwayland[242990]: channel 5 killed!
     supertuxkart[1181685]: segfault at 560800000000 ip 00007f617c0d5ba6 [...] in libgallium
 
-  So on NVAC, with 3/3 in place, the ERRORED event is delivered, the handler
-  runs, the fence context is killed, and the compositor is unaffected.
+  So on NVAC, with 3/3 in place, the ERRORED event is delivered, the
+  handler runs, the fence context is killed, and the compositor is
+  unaffected.
 
-  Two limits on what that proves. The escalation that disabled the channel
-  is local and not in this series; what this series contributes is that the
-  event reaches a subscriber at all instead of being dropped into an empty
-  notifier list. And the victim did not survive its own channel being
-  killed: it segfaulted inside Mesa rather than handling the -ENODEV fences.
-  Without the subscription it would have hung instead.
+  Two limits on what that proves. The escalation that disabled the
+  channel is local and not in this series; what this series contributes
+  is that the event reaches a subscriber at all instead of being dropped
+  into an empty notifier list. And the victim did not survive its own
+  channel being killed: it segfaulted inside Mesa rather than handling
+  the -ENODEV fences. Without the subscription it would have hung
+  instead.
 
   Games and sustained 3D. glxgears without vsync for ten minutes, and
   SuperTuxKart for a full race, ten and a half minutes, both with 3/3 in
   place. In both runs everything the kernel said came at window creation
   and was the known benign gr DATA_ERROR trap: 71 of those for glxgears,
-  three for SuperTuxKart, and none at all once either was running. No wedge,
-  no unexpected kill, and the session came through both unchanged.
+  three for SuperTuxKart, and none at all once either was running. No
+  wedge, no unexpected kill, and the session came through both
+  unchanged.
 
   Soak. Code equivalent to 1/3 and 3/3 has been running on this machine
   since 2026-07-25, across the kernel bumps 7.1.5 through 7.1.8, with no
   regression.
 
-  The 2/3 in this posting has NOT been soaked. What has been running since
-  2026-08-06 is the v3 form of it, which moved the subscription; the
-  handover in this version is new as of today. I will report back once it
-  has run.
+  The 2/3 in this posting has NOT been soaked. What has been running
+  since 2026-08-06 is the v3 form of it, which moved the subscription;
+  the handover in this version is new as of today. I will report back
+  once it has run.
 
   What the soak does not show, stated plainly: that tree carries local
-  patches this series does not, including a cap on the plane-fence wait in
-  the nonblocking commit tail. So the soak says these changes do not
+  patches this series does not, including a cap on the plane-fence wait
+  in the nonblocking commit tail. So the soak says these changes do not
   misbehave in daily use. It is not an independent demonstration of the
   failure modes above.
 

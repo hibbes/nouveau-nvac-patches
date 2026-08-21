@@ -1,3 +1,6 @@
+From d81b2960ff4b165371ea187d48a09701cd352b89 Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
+Date: Fri, 21 Aug 2026 17:09:54 +0200
 Subject: [PATCH v4 0/3] drm/nouveau: channel-kill event ordering fixes, and lower the gate to NV50
 
 This is v4. v3 is here:
@@ -119,3 +122,20 @@ Testing
 
   1/3 and 2/3 are ordering fixes for windows I have not managed to hit
   deliberately; the reasoning is from the source.
+
+Marek Czernohous (3):
+  drm/nouveau: unsubscribe the channel-kill event before the fence
+    context
+  drm/nouveau: don't kill a fence context that is not ready yet
+  drm/nouveau: subscribe to channel-kill events on NV50 and newer
+
+ drivers/gpu/drm/nouveau/nouveau_chan.c  | 30 ++++++++++++++++++++-----
+ drivers/gpu/drm/nouveau/nouveau_fence.c | 19 ++++++++++++++++
+ drivers/gpu/drm/nouveau/nouveau_fence.h |  8 +++++++
+ 3 files changed, 52 insertions(+), 5 deletions(-)
+
+
+base-commit: c21bb4193868a8de71fc4693fa741e195fdf5d86
+-- 
+2.54.0
+
