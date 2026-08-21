@@ -1,8 +1,8 @@
 diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c
-index c4b8e567d86f..38f281d3bfb4 100644
+index c4b8e567d86f..857a8497f075 100644
 --- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c
 +++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c
-@@ -327,11 +327,28 @@ nv04_fifo_intr_cache_error(struct nvkm_fifo *fifo, u32 chid, u32 get)
+@@ -327,11 +327,29 @@ nv04_fifo_intr_cache_error(struct nvkm_fifo *fifo, u32 chid, u32 get)
  
  	if (!(pull0 & 0x00000100) ||
  	    !nv04_fifo_swmthd(device, chid, mthd, data)) {
@@ -19,7 +19,8 @@ index c4b8e567d86f..38f281d3bfb4 100644
 +
 +		/*
 +		 * Mesa issues a method-0x0060 / data-0xbeef02xx binding
-+		 * probe that lands here on every session start.  It is
++		 * probe that lands here repeatedly over the life of a
++		 * session.  It is
 +		 * harmless and recovers cleanly, so log it at debug level
 +		 * and keep error level for the real thing.  The test is on
 +		 * the method and data pattern alone, so it applies to every

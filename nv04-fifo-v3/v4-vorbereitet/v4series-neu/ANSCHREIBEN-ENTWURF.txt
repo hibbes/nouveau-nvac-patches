@@ -54,7 +54,10 @@ On 2/4, and the two places where it differs from the sketch
   The idea is Lyude's and the patch says so. I would rather be told I have
   the memory model wrong than quietly ship a handshake that drops kills.
 
-  On the last line of that review
+  On the aside about writing the respin without Claude
+
+  Lyude closed the 2/4 review by suggesting I try the respin without an
+  assistant. This work is AI assisted, as the Assisted-by trailers say.
 
   The advice is right, and I would rather say so than let it pass. The
   honest position, though, is that I doubt I would have got to these bugs
@@ -77,24 +80,37 @@ Testing
   The kill path on this hardware has been exercised on purpose, not only
   observed, and under a real 3D workload. A local debug patch, which is not
   part of this series, synthesises a CACHE_ERROR on a nominated channel.
-  The victim was SuperTuxKart, mid-race:
+  The victim was SuperTuxKart, with its channel live under load. Verbatim,
+  timestamps and unrelated lines elided:
 
-    fifo: inject:   ch 2 [labwc]  ch 3 [labwc]  ch 4 [Xwayland]
-                    ch 5 [supertuxkart]
-    fifo: ch 5 fault 1/3 in 10000ms window, skipping method and resuming
-    fifo: ch 5 fault 2/3 in 10000ms window, skipping method and resuming
-    fifo:000000:0005:0005:[supertuxkart] errored - disabling channel
-    nouveau 0000:02:00.0: channel 5 killed!
-    supertuxkart: segfault ... in libgallium
+    nouveau 0000:02:00.0: fifo: inject:   ch   2 [labwc[5670]] errored 0
+    nouveau 0000:02:00.0: fifo: inject:   ch   3 [labwc[5670]] errored 0
+    nouveau 0000:02:00.0: fifo: inject:   ch   4 [Xwayland[242990]] errored 0
+    nouveau 0000:02:00.0: fifo: inject:   ch   5 [supertuxkart[1181685]] errored 0
+    [...]
+    nouveau 0000:02:00.0: fifo: ch 5 fault 1/3 in 10000ms window, skipping method and resuming (Tier-0)
+    nouveau 0000:02:00.0: fifo: ch 5 fault 2/3 in 10000ms window, skipping method and resuming (Tier-0)
+    nouveau 0000:02:00.0: fifo:000000:0005:0005:[supertuxkart[1181685]] errored - disabling channel
+    nouveau 0000:02:00.0: Xwayland[242990]: channel 5 killed!
+    supertuxkart[1181685]: segfault at 560800000000 ip 00007f617c0d5ba6 [...] in libgallium
 
   So on NVAC, with 4/4 in place, the ERRORED event is delivered, the handler
   runs, and the fence context is killed.
 
+  One oddity in that output which I cannot explain and am not fixing here:
+  the kill message names Xwayland, while the nvkm side names supertuxkart
+  for the same channel. nouveau_channel_killed() prints chan->cli->name, so
+  the DRM client that owns the channel is not the process the fifo layer
+  sees. I have seen it twice, on 2026-08-06 and here, and it is orthogonal
+  to this series.
+
   The compositor survived it. labwc kept the same pid across the kill and so
   did Xwayland, only the victim died, and the desktop stayed usable. That
-  answer needed a second attempt: this tree carries a local watchdog that
-  terminates the compositor on any channel kill, which hid the result until
-  I took it out of the way for the test.
+  answer needed a second attempt: this machine runs a local userspace
+  watchdog, an OpenRC service unrelated to the kernel, which terminates the
+  compositor when one of the session's own channels is killed and lets
+  greetd bring the session back. It hid the result until I stopped it for
+  the test.
 
   Two limits on what that proves. The escalation that disabled the channel
   is local and not in this series; what this series contributes is that the

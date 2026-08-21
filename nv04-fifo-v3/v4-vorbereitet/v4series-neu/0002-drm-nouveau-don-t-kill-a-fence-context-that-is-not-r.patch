@@ -1,6 +1,6 @@
-From ae3b682994278b02a1e13908edd8a1c34b3deca0 Mon Sep 17 00:00:00 2001
+From 9f9539cf0621d4027aac8f36706ba701df382c17 Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
-Date: Fri, 21 Aug 2026 07:37:18 +0200
+Date: Fri, 21 Aug 2026 10:28:11 +0200
 Subject: [PATCH v4 2/4] drm/nouveau: don't kill a fence context that is not
  ready yet
 
@@ -10,7 +10,8 @@ of the same function. The handler it installs, nouveau_channel_killed(),
 reaches nouveau_fence_context_kill(chan->fence).
 
 The NULL check in nouveau_channel_kill() does not cover the window in
-between. The backends publish the pointer before the context is usable:
+between. Every backend that can reach it publishes the pointer before the
+context is usable:
 
 	fctx = chan->fence = kzalloc_obj(*fctx);
 	if (!fctx)
@@ -60,8 +61,9 @@ tools/memory-model/litmus-tests/SB+fencembonceonces.litmus.
 
 The sketch also holds fctx->lock across the handover. The kill side
 cannot join it, because reaching fctx->lock is exactly what has to be
-avoided until the context is built: chan->fence is published by the
-allocation, before nouveau_fence_context_new() calls spin_lock_init().
+avoided until the context is built: on those backends chan->fence is
+published by the allocation, before nouveau_fence_context_new() calls
+spin_lock_init().
 So ->ready is read outside the lock. That answers the open question in
 the sketch as well: it does not have to be atomic_t, but it does have to
 be published with release and read with acquire, so that a caller that
@@ -117,7 +119,7 @@ index f142f6310596..605ce74c0d15 100644
  
  int
 diff --git a/drivers/gpu/drm/nouveau/nouveau_fence.c b/drivers/gpu/drm/nouveau/nouveau_fence.c
-index edbe9e08ba0f..5bd5623b2a1e 100644
+index edbe9e08ba0f..2fed631d44ba 100644
 --- a/drivers/gpu/drm/nouveau/nouveau_fence.c
 +++ b/drivers/gpu/drm/nouveau/nouveau_fence.c
 @@ -93,6 +93,25 @@ nouveau_fence_context_kill(struct nouveau_fence_chan *fctx, int error)
@@ -136,7 +138,7 @@ index edbe9e08ba0f..5bd5623b2a1e 100644
 +
 +	/* Pairs with the smp_load_acquire() in nouveau_channel_kill(). */
 +	smp_store_release(&fctx->ready, true);
-+	/* Pairs with the smp_mb() there; this store precedes that load. */
++	/* Pairs with the smp_mb() there: store-buffering, one side always sees the other. */
 +	smp_mb();
 +
 +	if (atomic_read(&chan->killed))
