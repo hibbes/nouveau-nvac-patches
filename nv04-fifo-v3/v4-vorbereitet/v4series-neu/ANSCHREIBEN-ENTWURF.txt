@@ -14,10 +14,11 @@ Thank you for the review. Changes since v3:
     and have the two sides hand the kill over. That is what this version
     does, and it is the better fix, because the kill is no longer lost.
 
-3/4 restructured as requested: subc, addr and the channel name are pulled
-    out ahead of the call, the Mesa bind probe has a comment, and the probe
-    is logged at debug level instead of error. The debug line now says
-    "(benign)" so the two format strings are not identical.
+3/4 restructured as requested: the debug line keeps the channel name, the
+    channel lookup and release moved out of the inner conditional so both
+    branches have it, and the format arguments are in local variables. The
+    debug line also says "(benign)" now, so the two format strings are not
+    identical.
 
 4/4 unchanged in code. Lyude asked what testing this has had on Tesla and
     said it will need input from others; the testing question is answered
