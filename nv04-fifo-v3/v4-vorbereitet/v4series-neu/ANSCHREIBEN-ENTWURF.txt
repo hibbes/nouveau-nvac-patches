@@ -56,15 +56,11 @@ On 2/4, and the two places where it differs from the sketch
 
   On the aside about writing the respin without Claude
 
-  Lyude closed the 2/4 review by suggesting I try the respin without an
-  assistant. This work is AI assisted, as the Assisted-by trailers say.
+  This work is AI assisted, as the Assisted-by trailers say.
 
   The advice is right, and I would rather say so than let it pass. The
   honest position, though, is that I doubt I would have got to these bugs
-  at all without the assistance, and not only because the machine I am
-  debugging is the machine that freezes under me: I do not yet know this
-  codebase well enough. What I do is check the code and the reasoning for
-  plausibility and run it on the hardware.
+  at all without the assistance.
 
 Testing
 
