@@ -18,3 +18,17 @@ Branch: v5-respin in ~/linux-nouveau-patches, auf 1/3 der v4 aufgesetzt,
 Warten auf Lyudes Review der v4. Moeglich ist auch, dass sie a) (Release
 in den Backends, eigener Patch) oder "Nachtrag" bevorzugt. Dann faellt
 diese v5 anders aus.
+
+## Stand 22.08. vormittags
+
+Fertig gebaut: checkpatch --strict 0/0/0 auf allen dreien, W=1 ohne
+Warnung. Gegenueber dem ersten Wurf ergaenzt: `chan->fence_armed = NULL`
+im Abbau (nach nvif_event_dtor(&chan->kill), vor context_del), damit kein
+Zeiger auf den freigegebenen Kontext stehen bleibt.
+
+Was zum Senden noch fehlt: Cover (Changes since v4, Bot-Verweis), und
+Lyudes Review der v4. Erst dann entscheidet sich, ob diese v5, eine
+andere Form, oder ein Nachtrag.
+
+Und: die Antwort an den Bot (nv04-fifo-v4/ANTWORT-BOT-ENTWURF.txt) kann
+dann "v5 is prepared" statt "I will take one" sagen.

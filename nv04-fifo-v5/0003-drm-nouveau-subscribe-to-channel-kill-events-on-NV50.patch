@@ -1,4 +1,4 @@
-From 07e5b0267d67f740bba8fae0b4c8daed074c1f66 Mon Sep 17 00:00:00 2001
+From be663cd4f3ca6cfc9e5809a90323ce26796abed0 Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
 Date: Fri, 21 Aug 2026 12:31:32 +0200
 Subject: [PATCH v5 3/3] drm/nouveau: subscribe to channel-kill events on NV50
@@ -43,10 +43,10 @@ Signed-off-by: Marek Czernohous <marek@czernohous.de>
  1 file changed, 1 insertion(+), 1 deletion(-)
 
 diff --git a/drivers/gpu/drm/nouveau/nouveau_chan.c b/drivers/gpu/drm/nouveau/nouveau_chan.c
-index 1a44537834f7..6f720691fd33 100644
+index 3f2055ab9365..b2c18f4d403b 100644
 --- a/drivers/gpu/drm/nouveau/nouveau_chan.c
 +++ b/drivers/gpu/drm/nouveau/nouveau_chan.c
-@@ -378,7 +378,7 @@ nouveau_channel_init(struct nouveau_channel *chan, u32 vram, u32 gart)
+@@ -379,7 +379,7 @@ nouveau_channel_init(struct nouveau_channel *chan, u32 vram, u32 gart)
  	if (ret)
  		return ret;
  

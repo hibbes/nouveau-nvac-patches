@@ -1,6 +1,6 @@
-From e3273fc68bae38c095f1ce2a825faa701cf48089 Mon Sep 17 00:00:00 2001
+From 0fd8831783586d1109b517d8d0f51cc8d73ff475 Mon Sep 17 00:00:00 2001
 From: Marek Czernohous <marek@czernohous.de>
-Date: Fri, 21 Aug 2026 18:04:36 +0200
+Date: Fri, 21 Aug 2026 18:06:21 +0200
 Subject: [PATCH v5 2/3] drm/nouveau: don't kill a fence context that is not
  ready yet
 
@@ -68,14 +68,14 @@ Suggested-by: Lyude Paul <lyude@redhat.com>
 Assisted-by: Claude:claude-opus-5
 Signed-off-by: Marek Czernohous <marek@czernohous.de>
 ---
- drivers/gpu/drm/nouveau/nouveau_chan.c  | 19 ++++++++++++++++---
+ drivers/gpu/drm/nouveau/nouveau_chan.c  | 20 +++++++++++++++++---
  drivers/gpu/drm/nouveau/nouveau_chan.h  |  6 ++++++
  drivers/gpu/drm/nouveau/nouveau_fence.c | 19 +++++++++++++++++++
  drivers/gpu/drm/nouveau/nouveau_fence.h |  1 +
- 4 files changed, 42 insertions(+), 3 deletions(-)
+ 4 files changed, 43 insertions(+), 3 deletions(-)
 
 diff --git a/drivers/gpu/drm/nouveau/nouveau_chan.c b/drivers/gpu/drm/nouveau/nouveau_chan.c
-index f142f6310596..1a44537834f7 100644
+index f142f6310596..3f2055ab9365 100644
 --- a/drivers/gpu/drm/nouveau/nouveau_chan.c
 +++ b/drivers/gpu/drm/nouveau/nouveau_chan.c
 @@ -43,9 +43,17 @@ module_param_named(vram_pushbuf, nouveau_vram_pushbuf, int, 0400);
@@ -98,7 +98,15 @@ index f142f6310596..1a44537834f7 100644
  }
  
  static int
-@@ -494,7 +502,12 @@ nouveau_channel_init(struct nouveau_channel *chan, u32 vram, u32 gart)
+@@ -97,6 +105,7 @@ nouveau_channel_del(struct nouveau_channel **pchan)
+ 		 * a window for a use-after-free.
+ 		 */
+ 		nvif_event_dtor(&chan->kill);
++		chan->fence_armed = NULL;
+ 
+ 		if (chan->fence)
+ 			nouveau_fence(chan->cli->drm)->context_del(chan);
+@@ -494,7 +503,12 @@ nouveau_channel_init(struct nouveau_channel *chan, u32 vram, u32 gart)
  	}
  
  	/* initialise synchronisation */
