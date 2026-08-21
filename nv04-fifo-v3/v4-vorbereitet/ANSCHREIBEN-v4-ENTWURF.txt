@@ -61,9 +61,8 @@ On 2/4, and the two places where it differs from the sketch
   at all without the assistance, and not only because the machine I am
   debugging is the machine that freezes under me: I do not yet know this
   codebase well enough. What I do is check the code and the reasoning for
-  plausibility, run it on the hardware, and say plainly what I have not
-  verified. The trailer stays because it is an accurate account of how the
-  series was produced.
+  plausibility and run it on the hardware. The trailer stays because it is
+  an accurate account of how the series was produced.
 
 Testing
 
