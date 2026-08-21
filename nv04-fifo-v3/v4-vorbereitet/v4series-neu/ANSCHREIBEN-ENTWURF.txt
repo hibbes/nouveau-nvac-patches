@@ -81,7 +81,7 @@ Testing
     supertuxkart[1181685]: segfault at 560800000000 ip 00007f617c0d5ba6 [...] in libgallium
 
   So on NVAC, with 3/3 in place, the ERRORED event is delivered, the handler
-  runs, and the fence context is killed.
+  runs, the fence context is killed, and the compositor is unaffected.
 
   Two limits on what that proves. The escalation that disabled the channel
   is local and not in this series; what this series contributes is that the
