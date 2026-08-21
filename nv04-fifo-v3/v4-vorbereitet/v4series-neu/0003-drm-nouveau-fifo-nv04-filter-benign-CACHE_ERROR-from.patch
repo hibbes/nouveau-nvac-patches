@@ -1,0 +1,74 @@
+From b9526ad20da78691f16cde2afcb1842c48d964e9 Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
+Date: Fri, 21 Aug 2026 03:48:22 +0200
+Subject: [PATCH v4 3/4] drm/nouveau/fifo/nv04: filter benign CACHE_ERROR from
+ Mesa NV50 bind probe
+
+The Mesa userspace driver issues a method-0x0060 / data-0xbeef02xx
+binding probe that ends up triggering CACHE_ERROR in the PFIFO
+interrupt handler. The probe is harmless and recovers cleanly, but it
+is reported at error level, so it shows up in dmesg on session start.
+
+Filter that specific pattern down to debug level so dmesg stays clean
+while real CACHE_ERROR conditions are still logged at error level.
+
+The test is on the method and data pattern alone, not on the chip
+family, so it applies wherever nv04_fifo_intr() is the handler, that is
+nv04 through g98. That is deliberate rather than an oversight: a false
+positive would need userspace to write exactly 0xbeef02xx to method
+0x0060, and the probe itself comes from the shared nouveau Gallium code
+rather than from anything NV50 specific. Say so here so the narrower
+wording of the subject is not read as a chip gate.
+
+Evidence: 99 occurrences across three logs from a second, independent
+MCP79/MCP7A machine running 7.0.10 and 6.12.90, under both Xorg and
+Wayland, with kwin and plasmashell named as the faulting clients. On my
+own reference machine the filter went in before the persistent kernel
+log did, so I cannot show a clean before and after from there.
+
+Assisted-by: Claude:claude-opus-5
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+---
+ .../gpu/drm/nouveau/nvkm/engine/fifo/nv04.c   | 25 ++++++++++++++++---
+ 1 file changed, 21 insertions(+), 4 deletions(-)
+
+diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c
+index c4b8e567d86f..38f281d3bfb4 100644
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c
+@@ -327,11 +327,28 @@ nv04_fifo_intr_cache_error(struct nvkm_fifo *fifo, u32 chid, u32 get)
+ 
+ 	if (!(pull0 & 0x00000100) ||
+ 	    !nv04_fifo_swmthd(device, chid, mthd, data)) {
++		u32 subc = (mthd >> 13) & 7;
++		u32 addr = mthd & 0x1ffc;
++		const char *name;
++
+ 		chan = nvkm_chan_get_chid(&fifo->engine, chid, &flags);
+-		nvkm_error(subdev, "CACHE_ERROR - "
+-			   "ch %d [%s] subc %d mthd %04x data %08x\n",
+-			   chid, chan ? chan->name : "unknown",
+-			   (mthd >> 13) & 7, mthd & 0x1ffc, data);
++		name = chan ? chan->name : "unknown";
++
++		/*
++		 * Mesa issues a method-0x0060 / data-0xbeef02xx binding
++		 * probe that lands here on every session start.  It is
++		 * harmless and recovers cleanly, so log it at debug level
++		 * and keep error level for the real thing.  The test is on
++		 * the method and data pattern alone, so it applies to every
++		 * chip that reaches this handler.
++		 */
++		if (addr == 0x0060 && (data & 0xffffff00) == 0xbeef0200)
++			nvkm_debug(subdev, "CACHE_ERROR - ch %d [%s] subc %d mthd %04x data %08x (benign)\n",
++				   chid, name, subc, addr, data);
++		else
++			nvkm_error(subdev, "CACHE_ERROR - ch %d [%s] subc %d mthd %04x data %08x\n",
++				   chid, name, subc, addr, data);
++
+ 		nvkm_chan_put(&chan, flags);
+ 	}
+ 
+-- 
+2.54.0
+

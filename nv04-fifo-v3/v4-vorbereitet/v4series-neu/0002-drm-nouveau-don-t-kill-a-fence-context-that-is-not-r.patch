@@ -1,3 +1,83 @@
+From 6f86c39c528889a13c1ba82113daa1929ef31506 Mon Sep 17 00:00:00 2001
+From: Marek Czernohous <marek@czernohous.de>
+Date: Fri, 21 Aug 2026 03:48:10 +0200
+Subject: [PATCH v4 2/4] drm/nouveau: don't kill a fence context that is not
+ ready yet
+
+nouveau_channel_init() arms the channel-kill subscription early, right
+after mapping userd, and only creates the fence context at the very end
+of the same function. The handler it installs, nouveau_channel_killed(),
+reaches nouveau_fence_context_kill(chan->fence).
+
+The NULL check in nouveau_channel_kill() does not cover the window in
+between. The backends publish the pointer before the context is usable:
+
+	fctx = chan->fence = kzalloc_obj(*fctx);
+	if (!fctx)
+		return -ENOMEM;
+
+	nouveau_fence_context_new(chan, &fctx->base);
+
+and nouveau_fence_context_new() is what runs spin_lock_init(&fctx->lock)
+and INIT_LIST_HEAD(&fctx->pending). An event arriving after the
+assignment but before that call finds chan->fence non-NULL and unusable:
+nouveau_fence_context_kill() takes a lock that was never initialised and
+walks a list head whose next pointer is still the NULL left by kzalloc().
+
+Give the fence context a ->ready flag and hand the kill over through it.
+nouveau_fence_context_arm() sets the flag once nouveau_channel_init()
+has finished building the context, and nouveau_channel_kill() leaves the
+context alone until it is set. A kill arriving while the context is
+still being built is no longer lost either: it is recorded in
+chan->killed, and nouveau_fence_context_arm() acts on it as soon as
+there is a context to kill.
+
+The two sides hand over rather than exclude each other, because the kill
+side must not touch fctx->lock at all before the context is built, which
+is the very bug being fixed. Each stores its own flag before it loads
+the other's, so at least one of them observes the other. Both observing
+it is harmless: nouveau_fence_context_kill() then walks a list the first
+caller has already emptied.
+
+This does not close the other window. A kill delivered before
+nouveau_channel_init() subscribes is still not observed at all, and
+nvkm_uchan_init() makes the channel schedulable before that point.
+Closing that one means subscribing before the channel becomes
+schedulable, which is a larger change than this fix.
+
+The approach is Lyude Paul's suggestion. It is implemented with two
+differences from the sketch, both following from the same detail.
+
+The sketch checks chan->killed before setting ->ready. Both sides have
+to store their own flag before loading the other's, or the interleaving
+loses the kill: arm() reads killed == 0, kill() sets killed and reads
+ready == false, arm() then sets ready, and neither calls
+nouveau_fence_context_kill(). That outcome is reachable under sequential
+consistency, so no barrier can forbid it and the two accesses have to be
+the other way round in program order. Swapped, and with the smp_mb() on
+each side, this is the store-buffering pattern of
+tools/memory-model/litmus-tests/SB+fencembonceonces.litmus.
+
+The sketch also holds fctx->lock across the handover. The kill side
+cannot join it, because reaching fctx->lock is exactly what has to be
+avoided until the context is built: chan->fence is published by the
+allocation, before nouveau_fence_context_new() calls spin_lock_init().
+So ->ready is read outside the lock. That answers the open question in
+the sketch as well: it does not have to be atomic_t, but it does have to
+be published with release and read with acquire, so that a caller that
+sees it set also sees the initialised lock and list.
+
+Fixes: ea13e5abf807 ("drm/nouveau: signal pending fences when channel has been killed")
+Cc: stable@vger.kernel.org
+Suggested-by: Lyude Paul <lyude@redhat.com>
+Assisted-by: Claude:claude-opus-5
+Signed-off-by: Marek Czernohous <marek@czernohous.de>
+---
+ drivers/gpu/drm/nouveau/nouveau_chan.c  | 30 ++++++++++++++++++---
+ drivers/gpu/drm/nouveau/nouveau_fence.c | 35 +++++++++++++++++++++++++
+ drivers/gpu/drm/nouveau/nouveau_fence.h |  9 +++++++
+ 3 files changed, 71 insertions(+), 3 deletions(-)
+
 diff --git a/drivers/gpu/drm/nouveau/nouveau_chan.c b/drivers/gpu/drm/nouveau/nouveau_chan.c
 index f142f6310596..ef1cdc132a0b 100644
 --- a/drivers/gpu/drm/nouveau/nouveau_chan.c
@@ -120,3 +200,6 @@ index 183dd43ecfff..5ecfca7296e8 100644
  
  int nv04_fence_create(struct nouveau_drm *);
  int nv04_fence_mthd(struct nouveau_channel *, u32, u32, u32);
+-- 
+2.54.0
+

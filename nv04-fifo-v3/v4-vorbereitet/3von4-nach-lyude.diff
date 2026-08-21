@@ -1,6 +1,8 @@
+diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c
+index c4b8e567d86f..38f281d3bfb4 100644
 --- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c
 +++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/nv04.c
-@@ -327,11 +327,28 @@
+@@ -327,11 +327,28 @@ nv04_fifo_intr_cache_error(struct nvkm_fifo *fifo, u32 chid, u32 get)
  
  	if (!(pull0 & 0x00000100) ||
  	    !nv04_fifo_swmthd(device, chid, mthd, data)) {
@@ -24,7 +26,7 @@
 +		 * chip that reaches this handler.
 +		 */
 +		if (addr == 0x0060 && (data & 0xffffff00) == 0xbeef0200)
-+			nvkm_debug(subdev, "CACHE_ERROR - ch %d [%s] subc %d mthd %04x data %08x\n",
++			nvkm_debug(subdev, "CACHE_ERROR - ch %d [%s] subc %d mthd %04x data %08x (benign)\n",
 +				   chid, name, subc, addr, data);
 +		else
 +			nvkm_error(subdev, "CACHE_ERROR - ch %d [%s] subc %d mthd %04x data %08x\n",

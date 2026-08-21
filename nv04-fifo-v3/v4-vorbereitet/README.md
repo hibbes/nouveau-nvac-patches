@@ -1,101 +1,103 @@
 # v4 der nv04-FIFO-Serie: Stand der Vorbereitung, NICHTS GESENDET
 
+Stand 21.08.2026, 04:00. Serie neu aufgebaut im Arbeitsbaum
+`scratchpad/v4wt` (Branch `v4-respin`) auf `c21bb4193868`.
+
 ## Ausgangslage nach Lyudes Durchsicht vom 20.08.2026
 
-| Patch | Rueckmeldung | Vorbereitung |
+| Patch | Rueckmeldung | Stand |
 |---|---|---|
-| 1/4 unsubscribe kill-event | **Reviewed-by Lyude** | unveraendert uebernehmen |
-| 2/4 subscribe after fence context | Entwurfsvorschlag Lyude | **neu gebaut**, `2von4-handschlag.diff` |
-| 3/4 CACHE_ERROR-Filter | drei Umbauwuensche | **umgebaut**, `3von4-nach-lyude.diff` |
-| 4/4 kill-events auf NV50+ | keine | unveraendert, Begruendung anpassen |
+| 1/4 unsubscribe kill-event | **Reviewed-by Lyude**, 15:10 -0400 | unveraendert, Tag nachgetragen |
+| 2/4 fence-context-Handschlag | Entwurfsvorschlag Lyude, 16:01 -0400 | **neu gebaut** |
+| 3/4 CACHE_ERROR-Filter | drei Umbauwuensche, 17:07 -0400 | umgebaut, plus `(benign)` |
+| 4/4 kill-events auf NV50+ | **Rueckfrage Lyude, 17:56 -0400** | **offen, siehe unten** |
 
-## 2/4: Lyudes Entwurf, plus eine Schranke
+## 2/4: zweimal korrigiert, beide Male gegen mich selbst
 
-### KORREKTUR 20.08. abends: die erste Fassung beruhte auf einer Fehllesung
+### Erste Fehllesung (20.08. abends)
 
-Eine frueherer Stand dieses Files behauptete, Lyude schlage vor, dass **beide**
-Seiten `fctx->lock` nehmen, und verwarf den Entwurf deshalb. Das steht so nicht
-in seiner Mail. Woertlich:
+Ein frueherer Stand behauptete, Lyude schlage vor, dass **beide** Seiten
+`fctx->lock` nehmen, und verwarf den Entwurf deshalb. Das steht so nicht in
+seiner Mail. Die Sperre nimmt nur die Init-Seite.
 
-> * Have `nouveau_channel_kill()` **check this atomic** after setting the
->   killed bit [...]
-> * Back in `nouveau_channel_init()`, [...] **grab the fence context lock**
+### Zweite Fehllesung (21.08. nachts, durch die adversariale Pruefung gefunden)
 
-Die Sperre nimmt nur die **Init-Seite**. Die Kill-Seite prueft bloss das
-Atomic. Damit faellt der ganze Einwand ueber die uninitialisierte Sperre weg,
-denn die Kill-Seite fasst sie nie an.
+Der daraufhin gebaute Patch war "sein Entwurf plus eine Schranke". Der
+Ordnungsbeweis dazu hatte einen Pfeil verkehrt herum. Nachgerechnet mit
+`sc-interleavings.py`, alle Verschraenkungen unter sequentieller Konsistenz:
 
-### Was wirklich fehlt: eine Schranke auf der Kill-Seite
+    arm: LOAD killed, dann STORE ready   ->  6 Verschraenkungen, 1 verliert den Kill
+    arm: STORE ready, dann LOAD killed   ->  6 Verschraenkungen, 0 verlieren ihn
 
-Sein Entwurf hat genau eine Luecke, und sie ist dokumentiert.
-`Documentation/atomic_t.txt:165`:
+Der Zeuge: `arm()` liest `killed`==0, `kill()` setzt `killed` und liest
+`ready`==0, `arm()` setzt `ready`. Beide steigen aus. Das ist unter SC
+erreichbar, also auf jeder Maschine. **Keine Schranke kann das verbieten**,
+Schranken ordnen Zugriffe, sie vertauschen sie nicht.
 
-> non-RMW operations are unordered
+Die Reihenfolge stammt aus Lyudes Skizze ("Check the killed atomic ... Set
+the atomic indicating that the fence is ready"). Der Patch benennt das
+sachlich, ohne Vorwurf.
 
-`atomic_set()` und `atomic_read()` sind non-RMW. Die Kill-Seite macht
+### Warum die Sperre ganz verschwindet
 
-    atomic_set(&chan->killed, 1);      /* Store */
-    if (atomic_read(&fctx->ready))     /* Load  */
+Die Kill-Seite darf `fctx->lock` gar nicht anfassen, bevor der Kontext fertig
+ist, denn genau das ist der behobene Fehler:
 
-Store-dann-Load ist die eine Richtung, die weder der Uebersetzer noch x86
-erhaelt. Der Store kann im Puffer stehen, waehrend `ready` als 0 gelesen wird,
-und `arm()` liest `killed` als 0, bevor er ankommt. Beide tun nichts, der Kill
-geht verloren.
+    nv50_fence.c:45   fctx = chan->fence = kzalloc_obj(*fctx);
+    nouveau_fence.c   nouveau_fence_context_new() -> spin_lock_init(&fctx->lock)
 
-Die Init-Seite ist Load-dann-Store. Das bleibt erhalten, und die Sperre
-sichert es zusaetzlich.
+`chan->fence` wird bei der Allokation veroeffentlicht, `spin_lock_init()`
+laeuft erst danach. `->ready` muss also **ohne** Sperre lesbar sein. Damit
+beantwortet sich auch Lyudes offene Frage ("might not need to be an atomic"):
+ein `bool` reicht, aber es braucht `smp_store_release` beim Setzen und
+`smp_load_acquire` beim Lesen, damit ein Leser, der es gesetzt sieht, auch die
+initialisierte Sperre und Liste sieht.
 
-### Beweis, dass eine Schranke reicht
+Es sind also zwei Schrankenpaare mit zwei verschiedenen Aufgaben:
 
-Angenommen, beide verpassen sich. Dann las kill `ready == 0` und arm
-`killed == 0`. Daraus folgt eine Kette:
+- **release/acquire** veroeffentlicht den fertigen Kontext (Message-Passing)
+- **`smp_mb()` auf beiden Seiten** schliesst das Store-Buffering-Rennen
+  (`tools/memory-model/litmus-tests/SB+fencembonceonces.litmus`)
 
-    arm.LD(killed) -> arm.ST(ready)        Programmordnung, durch die Sperre gedeckt
-    arm.ST(ready)  -> kill.LD(ready)       sonst haette kill die 1 gesehen
-    kill.LD(ready) -> kill.ST(killed)      rueckwaerts, durch smp_mb() gedeckt
-    kill.ST(killed)-> arm.LD(killed)       sonst haette arm die 1 gesehen
+## 3/4
 
-Das schliesst sich zu `arm.LD(killed)` vor sich selbst. Widerspruch. Also sieht
-mindestens eine Seite die andere.
+Alle drei Wuensche umgesetzt (`subc`/`addr`/`name` vorab, Kommentar zum
+Mesa-Probe, Debug- statt Fehlerstufe). Zusaetzlich traegt die Debug-Zeile jetzt
+`(benign)`, damit die beiden Formatzeichenketten nicht identisch sind.
+Belegt statt vermutet: `nvkm_debug` ist von der 100-Spalten-Pruefung
+ausgenommen, `nvkm_error` nicht (`checkpatch.pl` `$logFunctions` kennt `err`,
+nicht `error`). Eine Fassung mit waehlbarer Stufe geht nicht: `nvkm_printk`
+kopiert den Stufennamen als Token in den Aufruf.
 
-Dass beide toeten, ist unschaedlich: `nouveau_fence_context_kill()` wird
-ohnehin schon zweimal gerufen, im Kill-Pfad und bei `nouveau_fence.c:100` im
-Teardown, und der zweite Durchlauf findet `pending` leer.
+## 4/4: OFFEN, Rueckfrage unbeantwortet
 
-### Warum die Sperre auf der Init-Seite trotzdem bleibt
+Lyude hat am 20.08. um 17:56 -0400 geantwortet, Message-ID
+`9414b8d122b9489056d72ee1605787ee038e62b7.camel@redhat.com`:
 
-Sie tut mehr, als die Marken zu ordnen. `nouveau_fence_context_kill()` nimmt
-dieselbe Sperre. Ein Kill, der mitten in den Handschlag faellt, wartet also
-dort, statt einen unfertigen Kontext zu durchlaufen. Das ist genau die
-Wirkung, die Lyude mit "delay, but not block, any incoming kills" beschrieben
-hat.
+> This one is going to need some input from others I believe [...] I'd want
+> to really make sure we know what the implications of enabling an event like
+> this on Tesla are [...] What kind of testing have you done with this so far
+> in terms of workload [...] Tried running any games, anything graphics
+> intensive, etc.?
 
-### Warum `fctx->ready` und nicht `chan->fence != NULL`
+**Das ist zu beantworten, bevor 4/4 mitgeht.** Empfehlung der Pruefung: 4/4
+herausnehmen, die Frage ehrlich beantworten (auch wenn es keine Spiele gab),
+und den Klassen-Schalter spaeter zusammen mit einem Tesla-Erholungspfad
+einreichen. Beim Herausnehmen ist 1/4 anzupassen: sein reviewter Text verweist
+auf "The last patch in this series subscribes Tesla channels as well".
 
-Die Fence-Backends veroeffentlichen den Zeiger vor der Initialisierung:
+## Pruefstand
 
-    nv50_fence.c:45       fctx = chan->fence = kzalloc_obj(*fctx);
-    nv50_fence.c:49       nouveau_fence_context_new(chan, &fctx->base);
-    nouveau_fence.c:183       spin_lock_init(&fctx->lock);
-
-`chan->fence` wird also nicht-NULL, waehrend der Kontext noch unbrauchbar ist.
-`kzalloc` nullt allerdings auch `ready`, der Kill-Pfad steigt in diesem Fenster
-also korrekt aus, ohne irgendetwas anzufassen.
-
-## Stand der Pruefung
-
-- `checkpatch --strict`: **0 Warnungen, 0 Checks** fuer beide Patches,
-  nur der erwartete fehlende `Signed-off-by`.
-- Laengste Zeile 2/4: 77 Spalten. 3/4: 100 Spalten (Formatzeichenkette,
-  bewusst nicht umbrochen, siehe coding-style.rst).
-- **Bautest steht fuer beide aus.** Der 7.2.0-Baum baut noch, der Versuch im
-  7.1.9-Baum wurde abgebrochen und der Baum sauber wiederhergestellt.
+- checkpatch `--strict` auf alle vier: 0 Fehler, 0 Warnungen, 0 Anmerkungen
+- Serie wendet in Reihenfolge auf `c21bb4193868` an
+- Uebersetzung mit `W=1`: laeuft
 
 ## Offen
 
-- Bautest beider Patches
-- 4/4: Begruendung anpassen, weil 2/4 die Luecke jetzt schliesst statt sie
-  zu verschieben. Der Satz "That window does not close here, it moves"
-  stimmt nicht mehr.
-- Cover-Letter fuer die v4
-- `Signed-off-by` setzt Marek
+- Antwort auf Lyudes 4/4-Rueckfrage
+- Soak-Aussage im Cover: die Maschine laeuft die **alte** v3-Fassung von 2/4,
+  nicht den Handschlag. Der Satz "equivalent to 2/4 since 2026-08-06" gilt
+  nicht mehr und muss raus.
+- Entscheidung: `Assisted-by: Claude:claude-opus-5` stehen lassen? Lyude
+  schrieb "consider trying to write the respin without using claude!". Das Tag
+  ist die ehrliche Angabe; es zu entfernen waere die Unwahrheit.

@@ -1,6 +1,8 @@
+diff --git a/drivers/gpu/drm/nouveau/nouveau_chan.c b/drivers/gpu/drm/nouveau/nouveau_chan.c
+index ef1cdc132a0b..93ba5e6c4bce 100644
 --- a/drivers/gpu/drm/nouveau/nouveau_chan.c
 +++ b/drivers/gpu/drm/nouveau/nouveau_chan.c
-@@ -376,7 +376,7 @@
+@@ -389,7 +389,7 @@ nouveau_channel_init(struct nouveau_channel *chan, u32 vram, u32 gart)
  	if (ret)
  		return ret;
  
