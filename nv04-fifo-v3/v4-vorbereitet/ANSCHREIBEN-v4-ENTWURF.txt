@@ -75,17 +75,28 @@ Testing
     fbo-stress: segfault ... in libgallium-26.0.8.so
 
   So on NVAC, with 4/4 in place, the ERRORED event is delivered, the handler
-  runs, and the fence context is killed. labwc's own channels and Xwayland
-  were untouched and the session continued.
+  runs, and the fence context is killed. The GPU itself stayed healthy
+  across it: PGRAPH and the base channel read back normal afterwards, no
+  process was left in D state, and nothing was stuck in a fence wait.
 
-  Two things about that run should be said plainly. The escalation that
-  disabled the channel is local and not in this series; what this series
-  contributes is that the event reaches a subscriber at all instead of being
-  dropped into an empty notifier list. And the client did not survive its
-  channel being killed: it segfaulted inside Mesa rather than handling the
-  -ENODEV fences. Without the subscription it would have hung instead. I
-  think a crash the application can see beats a hang it cannot, but that is
-  a judgement, and it is the kind of thing Lyude was asking about.
+  Three things about that run should be said plainly, because they limit
+  what it proves.
+
+  The escalation that disabled the channel is local and not in this series.
+  What this series contributes is that the event reaches a subscriber at all
+  instead of being dropped into an empty notifier list.
+
+  The victim did not survive its channel being killed: it segfaulted inside
+  Mesa rather than handling the -ENODEV fences. Without the subscription it
+  would have hung instead. I think a fault the application can see beats a
+  hang it cannot, but that is a judgement, and it is the kind of thing worth
+  disagreeing with.
+
+  Whether the compositor survives, this run cannot say. That tree carries a
+  local watchdog that terminates the compositor on any channel kill, so
+  labwc went down and was respawned within 15 seconds regardless of what
+  nouveau did. I would have to take the watchdog out to answer that
+  properly, and I have not.
 
   Games and sustained 3D: none. This machine has no game workload on it.
   The 3D load it does see is the compositor, Xwayland, browsers with GL, and
