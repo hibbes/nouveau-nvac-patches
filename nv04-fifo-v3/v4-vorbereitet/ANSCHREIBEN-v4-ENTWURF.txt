@@ -83,11 +83,6 @@ Testing
   So on NVAC, with 3/3 in place, the ERRORED event is delivered, the handler
   runs, and the fence context is killed.
 
-  The compositor survived it. labwc kept the same pid across the kill and so
-  did Xwayland, only the victim died, and the desktop stayed usable. A local
-  userspace watchdog on this machine would have torn the compositor down on
-  that kill and hidden the result; I stopped it for the test.
-
   Two limits on what that proves. The escalation that disabled the channel
   is local and not in this series; what this series contributes is that the
   event reaches a subscriber at all instead of being dropped into an empty
