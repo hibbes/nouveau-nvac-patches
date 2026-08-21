@@ -107,10 +107,11 @@ Testing
 
   Games and sustained 3D. glxgears without vsync for ten minutes, and
   SuperTuxKart for a full race, ten and a half minutes, both with 4/4 in
-  place. Across both the kernel emitted nothing at all beyond the known
-  benign gr DATA_ERROR trap at window creation: three instances for the
-  race, none during it. No wedge, no unexpected kill, no CACHE_ERROR at
-  error level, and the session came through both unchanged.
+  place. In both runs everything the kernel said came at window creation
+  and was the known benign gr DATA_ERROR trap: 71 of those for glxgears,
+  three for SuperTuxKart, and none at all once either was running. No
+  wedge, no unexpected kill, no CACHE_ERROR at error level, and the
+  session came through both unchanged.
 
   Soak. Code equivalent to 1/4, 3/4 and 4/4 has been running on this machine
   since 2026-07-25, across the kernel bumps 7.1.5 through 7.1.8, with no
