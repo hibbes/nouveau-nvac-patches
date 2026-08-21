@@ -83,25 +83,10 @@ Testing
   So on NVAC, with 3/3 in place, the ERRORED event is delivered, the handler
   runs, and the fence context is killed.
 
-  One oddity in that output, orthogonal to this series but worth naming:
-  the kill message says Xwayland while the nvkm side says supertuxkart for
-  the same channel. The two names are separate snapshots of current->comm.
-  nouveau_channel_init() builds the nvkm one when the channel is created
-  (nouveau_chan.c), nouveau_drm_open() builds the DRM one when the file is
-  opened (nouveau_drm.c), and nouveau_channel_killed() prints the latter.
-  So they agree only when the same process did both. Why they diverge on
-  four of the eight channel kills this machine has logged, the first on
-  2026-07-25, I have not established.
-
   The compositor survived it. labwc kept the same pid across the kill and so
-  did Xwayland, only the victim died, and the desktop stayed usable. That
-  answer needed the watchdog out of the way first: this machine runs a local
-  userspace service, no kernel code involved, that terminates the compositor
-  when the kill message names one of the session's own processes, and lets
-  greetd bring the session back. Because that message names the DRM client
-  and not the process, as above, it would have fired on this kill too even
-  though the victim was neither labwc nor Xwayland. So I stopped it for the
-  test.
+  did Xwayland, only the victim died, and the desktop stayed usable. A local
+  userspace watchdog on this machine would have torn the compositor down on
+  that kill and hidden the result; I stopped it for the test.
 
   Two limits on what that proves. The escalation that disabled the channel
   is local and not in this series; what this series contributes is that the
