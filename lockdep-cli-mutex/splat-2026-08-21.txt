@@ -1,0 +1,145 @@
+Aug 21 14:02:33 [kernel] [  118.950482] WARNING: possible circular locking dependency detected
+Aug 21 14:02:33 [kernel] [  118.950486] 7.2.0-gentoo-nvac-soak #1 Tainted: G S         OE      
+Aug 21 14:02:33 [kernel] [  118.950491] ------------------------------------------------------
+Aug 21 14:02:33 [kernel] [  118.950493] labwc/8055 is trying to acquire lock:
+Aug 21 14:02:33 [kernel] [  118.950496] ffff889b88c302d0 (&cli->mutex){+.+.}-{4:4}, at: nouveau_bo_move_m2mf+0x9d/0x260 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.950923] 
+Aug 21 14:02:33 [kernel] [  118.950923] but task is already holding lock:
+Aug 21 14:02:33 [kernel] [  118.950925] ffff889be638f198 (reservation_ww_class_mutex){+.+.}-{4:4}, at: nouveau_bo_pin+0x29/0xb0 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.951221] 
+Aug 21 14:02:33 [kernel] [  118.951221] which lock already depends on the new lock.
+Aug 21 14:02:33 [kernel] [  118.951221] 
+Aug 21 14:02:33 [kernel] [  118.951223] 
+Aug 21 14:02:33 [kernel] [  118.951223] the existing dependency chain (in reverse order) is:
+Aug 21 14:02:33 [kernel] [  118.951226] 
+Aug 21 14:02:33 [kernel] [  118.951226] -> #1 (reservation_ww_class_mutex){+.+.}-{4:4}:
+Aug 21 14:02:33 [kernel] [  118.951235]        __lock_acquire+0x55d/0xbd0
+Aug 21 14:02:33 [kernel] [  118.951244]        lock_acquire.part.0+0x78/0x1c0
+Aug 21 14:02:33 [kernel] [  118.951249]        __ww_mutex_lock.constprop.0+0xfe/0x1640
+Aug 21 14:02:33 [kernel] [  118.951256]        ww_mutex_lock+0x3c/0xb0
+Aug 21 14:02:33 [kernel] [  118.951261]        nouveau_bo_pin+0x29/0xb0 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.951501]        nouveau_bo_new_pin+0x7b/0xa0 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.951501]        nouveau_bo_new_map+0x31/0x90 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.951501]        nouveau_channel_prep+0xfb/0x330 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.951501]        nouveau_channel_ctor+0x22e/0x5b0 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.951501]        nouveau_channel_new+0x2b/0xc0 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.951501]        nouveau_abi16_ioctl_channel_alloc+0x158/0x460 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.951501]        drm_ioctl_kernel+0xb1/0x110
+Aug 21 14:02:33 [kernel] [  118.951501]        drm_ioctl+0x2b5/0x580
+Aug 21 14:02:33 [kernel] [  118.951501]        nouveau_drm_ioctl+0x5b/0xc0 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.951501]        __x64_sys_ioctl+0x97/0xe0
+Aug 21 14:02:33 [kernel] [  118.951501]        do_syscall_64+0xf4/0x690
+Aug 21 14:02:33 [kernel] [  118.951501]        entry_SYSCALL_64_after_hwframe+0x76/0x7e
+Aug 21 14:02:33 [kernel] [  118.951501] 
+Aug 21 14:02:33 [kernel] [  118.951501] -> #0 (&cli->mutex){+.+.}-{4:4}:
+Aug 21 14:02:33 [kernel] [  118.951501]        check_prev_add+0xe1/0xe00
+Aug 21 14:02:33 [kernel] [  118.951501]        validate_chain+0x4c1/0x730
+Aug 21 14:02:33 [kernel] [  118.951501]        __lock_acquire+0x55d/0xbd0
+Aug 21 14:02:33 [kernel] [  118.951501]        lock_acquire.part.0+0x78/0x1c0
+Aug 21 14:02:33 [kernel] [  118.951501]        __mutex_lock+0xda/0x10a0
+Aug 21 14:02:33 [kernel] [  118.951501]        nouveau_bo_move_m2mf+0x9d/0x260 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.951501]        nouveau_bo_move+0x4ec/0x880 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.951501]        ttm_bo_handle_move_mem+0xd0/0x1a0 [ttm]
+Aug 21 14:02:33 [kernel] [  118.951501]        ttm_bo_validate+0xf5/0x1e0 [ttm]
+Aug 21 14:02:33 [kernel] [  118.951501]        nouveau_bo_pin_locked+0xad/0x250 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.951501]        nouveau_bo_pin+0x41/0xb0 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.954757]        nv50_wndw_prepare_fb+0x4d/0x160 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.954757]        drm_atomic_helper_prepare_planes.part.0+0x2d/0x1d0 [drm_kms_helper]
+Aug 21 14:02:33 [kernel] [  118.954757]        nv50_disp_atomic_commit.part.0+0xbc/0x1e0 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.954757]        drm_atomic_commit+0xb1/0xe0
+Aug 21 14:02:33 [kernel] [  118.954757]        drm_atomic_helper_update_plane+0xf1/0x150 [drm_kms_helper]
+Aug 21 14:02:33 [kernel] [  118.954757]        drm_mode_cursor_universal+0xf4/0x2d0
+Aug 21 14:02:33 [kernel] [  118.954757]        drm_mode_cursor_common+0x110/0x240
+Aug 21 14:02:33 [kernel] [  118.954757]        drm_mode_cursor_ioctl+0x51/0x70
+Aug 21 14:02:33 [kernel] [  118.954757]        drm_ioctl_kernel+0xb1/0x110
+Aug 21 14:02:33 [kernel] [  118.954757]        drm_ioctl+0x2b5/0x580
+Aug 21 14:02:33 [kernel] [  118.954757]        nouveau_drm_ioctl+0x5b/0xc0 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.954757]        __x64_sys_ioctl+0x97/0xe0
+Aug 21 14:02:33 [kernel] [  118.954757]        do_syscall_64+0xf4/0x690
+Aug 21 14:02:33 [kernel] [  118.954757]        entry_SYSCALL_64_after_hwframe+0x76/0x7e
+Aug 21 14:02:33 [kernel] [  118.954757] 
+Aug 21 14:02:33 [kernel] [  118.954757] other info that might help us debug this:
+Aug 21 14:02:33 [kernel] [  118.954757] 
+Aug 21 14:02:33 [kernel] [  118.954757]  Possible unsafe locking scenario:
+Aug 21 14:02:33 [kernel] [  118.954757] 
+Aug 21 14:02:33 [kernel] [  118.954757]        CPU0                    CPU1
+Aug 21 14:02:33 [kernel] [  118.954757]        ----                    ----
+Aug 21 14:02:33 [kernel] [  118.954757]   lock(reservation_ww_class_mutex);
+Aug 21 14:02:33 [kernel] [  118.954757]                                lock(&cli->mutex);
+Aug 21 14:02:33 [kernel] [  118.954757]                                lock(reservation_ww_class_mutex);
+Aug 21 14:02:33 [kernel] [  118.954757]   lock(&cli->mutex);
+Aug 21 14:02:33 [kernel] [  118.954757] 
+                - Last output repeated twice -
+Aug 21 14:02:33 [kernel] [  118.954757] 3 locks held by labwc/8055:
+Aug 21 14:02:33 [kernel] [  118.954757]  #0: ffffc8b8412bba00 (crtc_ww_class_acquire){+.+.}-{0:0}, at: drm_mode_cursor_common+0xd2/0x240
+Aug 21 14:02:33 [kernel] [  118.954757]  #1: ffffc8b8412bba28 (crtc_ww_class_mutex){+.+.}-{4:4}, at: drm_mode_cursor_common+0xd2/0x240
+Aug 21 14:02:33 [kernel] [  118.954757]  #2: ffff889be638f198 (reservation_ww_class_mutex){+.+.}-{4:4}, at: nouveau_bo_pin+0x29/0xb0 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.954757] 
+Aug 21 14:02:33 [kernel] [  118.954757] stack backtrace:
+Aug 21 14:02:33 [kernel] [  118.954757] CPU: 0 UID: 1000 PID: 8055 Comm: labwc Tainted: G S         OE       7.2.0-gentoo-nvac-soak #1 PREEMPT(lazy) 
+Aug 21 14:02:33 [kernel] [  118.954757] Tainted: [S]=CPU_OUT_OF_SPEC, [O]=OOT_MODULE, [E]=UNSIGNED_MODULE
+Aug 21 14:02:33 [kernel] [  118.954757] Hardware name: Apple Inc. Macmini3,1/Mac-F22C86C8, BIOS     MM31.88Z.0081.B06.0904271717 04/27/09
+Aug 21 14:02:33 [kernel] [  118.954757] Call Trace:
+Aug 21 14:02:33 [kernel] [  118.954757]  <TASK>
+Aug 21 14:02:33 [kernel] [  118.954757]  dump_stack_lvl+0x6e/0xa0
+Aug 21 14:02:33 [kernel] [  118.954757]  print_circular_bug.cold+0x38/0x46
+Aug 21 14:02:33 [kernel] [  118.954757]  check_noncircular+0x148/0x170
+Aug 21 14:02:33 [kernel] [  118.954757]  check_prev_add+0xe1/0xe00
+Aug 21 14:02:33 [kernel] [  118.954757]  ? look_up_lock_class+0x59/0x120
+Aug 21 14:02:33 [kernel] [  118.954757]  validate_chain+0x4c1/0x730
+Aug 21 14:02:33 [kernel] [  118.954757]  __lock_acquire+0x55d/0xbd0
+Aug 21 14:02:33 [kernel] [  118.954757]  lock_acquire.part.0+0x78/0x1c0
+Aug 21 14:02:33 [kernel] [  118.954757]  ? nouveau_bo_move_m2mf+0x9d/0x260 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.954757]  __mutex_lock+0xda/0x10a0
+Aug 21 14:02:33 [kernel] [  118.954757]  ? nouveau_bo_move_m2mf+0x9d/0x260 [nouveau]
+                - Last output repeated 2 times -
+Aug 21 14:02:33 [kernel] [  118.954757]  nouveau_bo_move_m2mf+0x9d/0x260 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.954757]  nouveau_bo_move+0x4ec/0x880 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.954757]  ? lock_is_held_type+0x9a/0x110
+Aug 21 14:02:33 [kernel] [  118.954757]  ? dma_resv_reserve_fences+0x2db/0x360
+Aug 21 14:02:33 [kernel] [  118.954757]  ttm_bo_handle_move_mem+0xd0/0x1a0 [ttm]
+Aug 21 14:02:33 [kernel] [  118.954757]  ttm_bo_validate+0xf5/0x1e0 [ttm]
+Aug 21 14:02:33 [kernel] [  118.954757]  nouveau_bo_pin_locked+0xad/0x250 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.954757]  nouveau_bo_pin+0x41/0xb0 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.954757]  nv50_wndw_prepare_fb+0x4d/0x160 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.954757]  drm_atomic_helper_prepare_planes.part.0+0x2d/0x1d0 [drm_kms_helper]
+Aug 21 14:02:33 [kernel] [  118.954757]  nv50_disp_atomic_commit.part.0+0xbc/0x1e0 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.954757]  drm_atomic_commit+0xb1/0xe0
+Aug 21 14:02:33 [kernel] [  118.954757]  ? __pfx___drm_printfn_info+0x10/0x10
+Aug 21 14:02:33 [kernel] [  118.954757]  drm_atomic_helper_update_plane+0xf1/0x150 [drm_kms_helper]
+Aug 21 14:02:33 [kernel] [  118.954757]  drm_mode_cursor_universal+0xf4/0x2d0
+Aug 21 14:02:33 [kernel] [  118.954757]  ? __pfx_drm_mode_cursor_ioctl+0x10/0x10
+Aug 21 14:02:33 [kernel] [  118.954757]  drm_mode_cursor_common+0x110/0x240
+Aug 21 14:02:33 [kernel] [  118.954757]  ? __pfx_drm_mode_cursor_ioctl+0x10/0x10
+Aug 21 14:02:33 [kernel] [  118.954757]  drm_mode_cursor_ioctl+0x51/0x70
+Aug 21 14:02:33 [kernel] [  118.954757]  drm_ioctl_kernel+0xb1/0x110
+Aug 21 14:02:33 [kernel] [  118.954757]  drm_ioctl+0x2b5/0x580
+Aug 21 14:02:33 [kernel] [  118.954757]  ? __pfx_drm_mode_cursor_ioctl+0x10/0x10
+Aug 21 14:02:33 [kernel] [  118.954757]  nouveau_drm_ioctl+0x5b/0xc0 [nouveau]
+Aug 21 14:02:33 [kernel] [  118.954757]  __x64_sys_ioctl+0x97/0xe0
+Aug 21 14:02:33 [kernel] [  118.954757]  do_syscall_64+0xf4/0x690
+Aug 21 14:02:33 [kernel] [  118.954757]  ? __lock_acquire+0x55d/0xbd0
+Aug 21 14:02:33 [kernel] [  118.954757]  ? timerqueue_linked_add+0x7e/0xd0
+Aug 21 14:02:33 [kernel] [  118.954757]  ? __hrtimer_start_range_ns+0x1db/0x6c0
+Aug 21 14:02:33 [kernel] [  118.954757]  ? find_held_lock+0x2b/0x80
+                - Last output repeated twice -
+Aug 21 14:02:33 [kernel] [  118.954757]  ? __lock_release.isra.0+0x59/0x170
+Aug 21 14:02:33 [kernel] [  118.954757]  ? lockdep_hardirqs_on_prepare.part.0+0x9b/0x140
+Aug 21 14:02:33 [kernel] [  118.954757]  ? trace_hardirqs_on+0x18/0xf0
+Aug 21 14:02:33 [kernel] [  118.954757]  ? finish_task_switch.isra.0+0x103/0x3b0
+Aug 21 14:02:33 [kernel] [  118.954757]  ? __schedule+0x674/0x800
+Aug 21 14:02:33 [kernel] [  118.954757]  ? trace_hardirqs_off+0x4e/0xe0
+Aug 21 14:02:33 [kernel] [  118.954757]  ? schedule+0x3a/0x100
+Aug 21 14:02:33 [kernel] [  118.954757]  ? switch_fpu_return+0x115/0x140
+Aug 21 14:02:33 [kernel] [  118.954757]  ? trace_hardirqs_on_prepare+0xc6/0xe0
+Aug 21 14:02:33 [kernel] [  118.954757]  ? lockdep_hardirqs_on_prepare.part.0+0x9b/0x140
+Aug 21 14:02:33 [kernel] [  118.954757]  ? trace_hardirqs_on+0x18/0xf0
+Aug 21 14:02:33 [kernel] [  118.954757]  ? do_syscall_64+0xab/0x690
+Aug 21 14:02:33 [kernel] [  118.954757]  entry_SYSCALL_64_after_hwframe+0x76/0x7e
+Aug 21 14:02:33 [kernel] [  118.954757] RIP: 0033:0x7f7154522e3f
+Aug 21 14:02:33 [kernel] [  118.954757] RAX: ffffffffffffffda RBX: 000055a34bec4a88 RCX: 00007f7154522e3f
+Aug 21 14:02:33 [kernel] [  118.954757] RDX: 00007ffd6d92e900 RSI: 00000000c01c64a3 RDI: 000000000000000e
+Aug 21 14:02:33 [kernel] [  118.954757] RBP: 00007ffd6d92e900 R08: 0000000000000040 R09: 000055a34be9a3e0
+Aug 21 14:02:33 [kernel] [  118.954757] R10: 0000000000000030 R11: 0000000000000246 R12: 00000000c01c64a3
+Aug 21 14:02:33 [kernel] [  118.954757] R13: 000000000000000e R14: 00007ffd6d92eb40 R15: 000055a34cdaebf0
+Aug 21 14:02:33 [kernel] [  118.954757]  </TASK>
