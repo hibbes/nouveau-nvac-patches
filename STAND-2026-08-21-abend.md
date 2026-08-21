@@ -25,3 +25,12 @@
   pruefen (einer von vier hielt nicht, drei hielten). Pruefer-Angabe ist erst
   nach eigener Pruefung Tatsache (Mesa-Fundstelle). get_maintainer liefert
   tote Adressen mit.
+
+## Nachtrag 22:00: Klaus fuer die Abwesenheit
+
+Marek ist 22.08. bis ~05.09. unterwegs, Kommunikation per Telegram.
+Klaus = klaus-node (seit 19.07., Agent SDK, persistente Session), laeuft.
+Ich hatte faelschlich den alten Bash-Poller reaktiviert und klaus-node
+damit 2 h gestoert (409); zurueckgebaut. Details im Memory
+(session_klaus_telegram_repair_2026_08_21). Discord stillgelegt.
+Waechter, Watchdog, Briefing, Tailscale: alles an.
