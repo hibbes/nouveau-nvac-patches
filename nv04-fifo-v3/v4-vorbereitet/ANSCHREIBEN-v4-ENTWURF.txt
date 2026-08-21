@@ -57,13 +57,13 @@ On 2/4, and the two places where it differs from the sketch
   On the last line of that review
 
   The advice is right, and I would rather say so than let it pass. The
-  honest position, though, is that without the assistance I would not have
-  got to these bugs at all, and not only because the machine I am debugging
-  is the machine that freezes under me. I do not know this codebase, and I
-  would not have found my way through it on my own. What I can do is check
-  what comes out of it, run it on the hardware, and say plainly what I have
-  not verified. The trailer stays because it is an accurate account of how
-  the series was produced.
+  honest position, though, is that I doubt I would have got to these bugs
+  at all without it, and not only because the machine I am debugging is
+  the machine that freezes under me. I do not yet know this codebase well
+  enough, and I am not sure I would have found my way through it alone.
+  What I can do is check what comes out of it, run it on the hardware, and
+  say plainly what I have not verified. The trailer stays because it is an
+  accurate account of how the series was produced.
 
 Testing
 
