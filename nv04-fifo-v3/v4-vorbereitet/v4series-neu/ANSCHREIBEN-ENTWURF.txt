@@ -11,8 +11,7 @@ Thank you for the review. Changes since v3:
 2/3 rewritten. v3 moved the subscription behind context_new(), which traded
     a half-built fence context for a missed kill. Lyude pointed out that the
     subscription does not have to move at all: give the fence context a flag
-    and have the two sides hand the kill over. That is what this version
-    does, and it is the better fix, because the kill is no longer lost.
+    and have the two sides hand the kill over.
 
 3/3 is v3's 4/4, unchanged in code. Lyude asked what testing this has had
     on Tesla and said it will need input from others; the testing question
@@ -31,10 +30,7 @@ Withdrawn since v3
   patch read "subc 0 mthd 0060 data beef0201". The handle value is not from
   the kernel, it arrives with the channel allocation, but I have not
   established which userspace component picks it, and I have not
-  established that those two writes are what faults.
-
-  What I am sure of is that I should not demote an error the driver raises
-  about its own pushbuf while the cause is open. I will look at it
+  established that those two writes are what faults. I will look at it
   separately rather than carry it here.
 
 On 2/3, and the two places where it differs from the sketch
@@ -46,8 +42,7 @@ On 2/3, and the two places where it differs from the sketch
   cannot take fctx->lock, because that lock is exactly what must not be
   touched before the context is built, so ->ready is a plain bool read
   outside the lock, published with release and read with acquire. The
-  commit message has the full argument, and I would rather be told I have
-  the memory model wrong than quietly ship a handshake that drops kills.
+  commit message has the full argument.
 
 On the aside about writing the respin without Claude
 
@@ -113,9 +108,7 @@ Testing
   event reaches a subscriber at all instead of being dropped into an empty
   notifier list. And the victim did not survive its own channel being
   killed: it segfaulted inside Mesa rather than handling the -ENODEV fences.
-  Without the subscription it would have hung instead. I think a fault the
-  application can see beats a hang it cannot, but that is a judgement, and
-  it is the kind of thing worth disagreeing with.
+  Without the subscription it would have hung instead.
 
   Games and sustained 3D. glxgears without vsync for ten minutes, and
   SuperTuxKart for a full race, ten and a half minutes, both with 3/3 in
@@ -131,7 +124,7 @@ Testing
   The 2/3 in this posting has NOT been soaked. What has been running since
   2026-08-06 is the v3 form of it, which moved the subscription; the
   handover in this version is new as of today. I will report back once it
-  has run, and I would rather say this than let the v3 sentence stand.
+  has run.
 
   What the soak does not show, stated plainly: that tree carries local
   patches this series does not, including a cap on the plane-fence wait in
