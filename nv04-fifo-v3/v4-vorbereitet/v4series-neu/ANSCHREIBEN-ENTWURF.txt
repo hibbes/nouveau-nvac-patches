@@ -106,11 +106,13 @@ Testing
 
   The compositor survived it. labwc kept the same pid across the kill and so
   did Xwayland, only the victim died, and the desktop stayed usable. That
-  answer needed a second attempt: this machine runs a local userspace
-  watchdog, an OpenRC service unrelated to the kernel, which terminates the
-  compositor when one of the session's own channels is killed and lets
-  greetd bring the session back. It hid the result until I stopped it for
-  the test.
+  answer needed the watchdog out of the way first: this machine runs a local
+  userspace service, no kernel code involved, that terminates the compositor
+  when the kill message names one of the session's own processes, and lets
+  greetd bring the session back. Because that message names the DRM client
+  and not the process, as above, it would have fired on this kill too even
+  though the victim was neither labwc nor Xwayland. So I stopped it for the
+  test.
 
   Two limits on what that proves. The escalation that disabled the channel
   is local and not in this series; what this series contributes is that the
