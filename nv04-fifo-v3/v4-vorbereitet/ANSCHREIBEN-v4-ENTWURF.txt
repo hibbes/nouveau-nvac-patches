@@ -80,7 +80,7 @@ Testing
 
   Build. Built against the stated base commit c21bb4193868. The nouveau
   module compiles and links with W=1 and no new warnings. checkpatch.pl
-  --strict is clean on all four patches.
+  --strict is clean on all three patches.
 
   Deliberate channel kills on Tesla, which is Lyude's question on 3/3.
 
@@ -104,12 +104,15 @@ Testing
   So on NVAC, with 3/3 in place, the ERRORED event is delivered, the handler
   runs, and the fence context is killed.
 
-  One oddity in that output which I cannot explain and am not fixing here:
-  the kill message names Xwayland, while the nvkm side names supertuxkart
-  for the same channel. nouveau_channel_killed() prints chan->cli->name, so
-  the DRM client that owns the channel is not the process the fifo layer
-  sees. I have seen it on four of the eight channel kills this machine has
-  logged, the first on 2026-07-25, and it is orthogonal to this series.
+  One oddity in that output, orthogonal to this series but worth naming:
+  the kill message says Xwayland while the nvkm side says supertuxkart for
+  the same channel. The two names are separate snapshots of current->comm.
+  nouveau_channel_init() builds the nvkm one when the channel is created
+  (nouveau_chan.c), nouveau_drm_open() builds the DRM one when the file is
+  opened (nouveau_drm.c), and nouveau_channel_killed() prints the latter.
+  So they agree only when the same process did both. Why they diverge on
+  four of the eight channel kills this machine has logged, the first on
+  2026-07-25, I have not established.
 
   The compositor survived it. labwc kept the same pid across the kill and so
   did Xwayland, only the victim died, and the desktop stayed usable. That
@@ -134,8 +137,8 @@ Testing
   SuperTuxKart for a full race, ten and a half minutes, both with 3/3 in
   place. In both runs everything the kernel said came at window creation
   and was the known benign gr DATA_ERROR trap: 71 of those for glxgears,
-  three for SuperTuxKart, and none at all once either was running. No wedge, no
-  unexpected kill, and the session came through both unchanged.
+  three for SuperTuxKart, and none at all once either was running. No wedge,
+  no unexpected kill, and the session came through both unchanged.
 
   Soak. Code equivalent to 1/3 and 3/3 has been running on this machine
   since 2026-07-25, across the kernel bumps 7.1.5 through 7.1.8, with no
