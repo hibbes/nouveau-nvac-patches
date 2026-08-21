@@ -1,0 +1,50 @@
+In-Reply-To: <20260821153546.EAA0E1F000E9@smtp.kernel.org>   (Bot auf 2/3)
+Subject: Re: [PATCH v4 2/3] drm/nouveau: don't kill a fence context that is not ready yet
+
+Taking the findings across the three replies together, since two of
+them are the same point seen from 2/3 and 3/3.
+
+The publication of chan->fence is the real one, and the bot is right.
+The backends do
+
+	fctx = chan->fence = kzalloc_obj(*fctx);
+
+with a plain store, so a reader on another CPU can observe the pointer
+before the allocator's zeroing stores are visible to it. The acquire on
+fctx->ready in nouveau_channel_kill() orders everything after that load,
+but it cannot order what came before the pointer itself, so on a
+weakly ordered machine ->ready could be read as garbage and the handler
+could take the uninitialised lock. x86 does not reorder stores, which is
+why nothing shows here, but the argument in the commit message assumed
+the zeroing was covered and it is not.
+
+This is pre-existing: before 2/3 the same plain publish fed a
+nouveau_fence_context_kill() that checked nothing at all. 2/3 narrows it
+to the zeroing, it does not close it. Two ways to close it, and I will
+take one for v5 once the review of the rest has come in:
+
+  - publish with smp_store_release() in the five backends, so the acquire
+    on ->ready also covers the allocation, or
+  - hand over through a pointer that nouveau_fence_context_arm() sets
+    itself, so there is no window in which the pointer is visible and the
+    object behind it is not built.
+
+The second is cleaner and touches less of the backends; I lean towards
+it but would rather hear whether Lyude has a preference, given 2/3 is
+her design.
+
+The error path in nouveau_channel_init() I believe is covered, though
+for a different reason than the flag. nv84_fence_context_del() clears
+chan->fence before nouveau_fence_context_free(), and
+nouveau_fence_context_del() runs synchronize_rcu() in between, so the
+pointer is gone before the memory is. nouveau_channel_kill() cannot
+reach a freed context through it.
+
+The two findings on 1/3 are the teardown series from 2026-08-15:
+
+  https://lore.kernel.org/all/178682366001.3748010.7798811159846779765@gmail.com/
+
+1/3 of that (disable_work_sync in nouveau_fence_context_del) is in
+drm-misc-next since 2026-08-20, 2/3 (cancel the DP IRQ work before
+freeing the connector) has Lyude's Reviewed-by. The bot is reading the
+base commit, which has neither.

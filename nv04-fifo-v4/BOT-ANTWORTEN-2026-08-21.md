@@ -12,9 +12,11 @@ Der Bot sieht nur die Basis c21bb4193868. Antwort: Verweis, zwei Saetze.
 
 ## 2/3 (b): Fehlerpfad bei context_new-Fehlschlag
 
-Abgedeckt: kein arm(), ready bleibt false, Kill-Seite tut nichts,
-Aufrufer -> nouveau_channel_del -> 1/3 meldet zuerst ab. Antwort: der
-Pfad in drei Saetzen.
+KORREKTUR 22.08.: meine Begruendung "ready bleibt false" haelt nur, wenn
+das Nullen sichtbar ist, haengt also am Hauptbefund. Der echte Schutz:
+nv84_fence_context_del() setzt chan->fence = NULL VOR dem kfree, dazwischen
+synchronize_rcu() in nouveau_fence_context_del(). Der Zeiger geht, bevor
+der Speicher geht. Kein UAF erreichbar. Antwort: genau das.
 
 ## 2/3 (a) und 3/3: DER ECHTE BEFUND
 
@@ -39,5 +41,5 @@ Zwei Loesungen fuer eine v5:
      (chan->fence_ready o.ae.). Kein Fenster mehr, in dem Zeiger sichtbar
      und Inhalt unfertig ist. Sauberer, aendert aber mehr.
 
-Plan: Lyude abwarten. Sie koennte b) selbst vorschlagen. Eine v5 vor ihrem
+Antwortentwurf: ANTWORT-BOT-ENTWURF.txt. Plan: Lyude abwarten. Sie koennte b) selbst vorschlagen. Eine v5 vor ihrem
 Review waere voreilig. Antwort an den Bot: anerkennen, v5 ankuendigen.
