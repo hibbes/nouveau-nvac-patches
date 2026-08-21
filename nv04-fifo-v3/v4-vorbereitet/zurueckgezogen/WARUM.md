@@ -91,3 +91,31 @@ darueber. Hier nicht installiert, also nicht nachstellbar.
 
 Stand: Probe bleibt scharf und laeuft im Alltag mit. Ein Xorg-Nachbau
 lohnt erst, wenn sie auch nach Tagen nichts zeigt.
+
+## ERSTER TREFFER der 0060-probe, 21.08. 18:09:21
+
+    CACHE_ERROR - ch 2 [labwc[8055]] subc 0 mthd 0060 data beef0201
+    pull0 20000010 HASH_FAILED ramht MISSING (0060-probe)
+
+Auf labwcs eigenem Kanal, 70 Minuten nach dem Fence-Sturm, bei normaler
+Desktop-Arbeit. GPU danach gesund (PGRAPH_STATUS 0, labwc PID
+unveraendert, kein D-State). Der Warner hat Klaus alarmiert, weil er die
+Zeile als fifo-trap liest; er greift bei labwc nicht ein.
+
+**Was davon gilt:** `pull0 20000010 HASH_FAILED` ist echt. Der Puller hat
+den RAMHT-Lookup auf 0xbeef0201 abgelehnt. Das bestaetigt envytools: der
+einzige Fehlerpfad von 0x0060 auf G80 ist ein fehlgeschlagener Lookup.
+
+**Was davon NICHT gilt:** `ramht MISSING` ist ein Artefakt meiner Probe.
+Auf NV50 ist das RAMHT pro Kanal, und nv50_eobj_ramht_add fuegt mit
+chid 0 ein (nv50.c:44); chid geht in den Hash ein (ramht.c:36). Meine
+Probe suchte mit dem FIFO-chid 2, also im falschen Eimer nach dem
+falschen Eintrag, und haette fuer JEDEN Kanal MISSING gemeldet.
+
+Die Frage "steht der Griff im RAMHT" ist also weiter offen. Probe v2 (seit
+22.08. im 7.2.0-Quellbaum, Modul noch zu bauen): sucht mit chid 0 UND
+gibt alle lebenden Eintraege des Kanals mit Griff/chid aus. Der naechste
+Treffer erklaert sich selbst, unabhaengig von meiner Hash-Annahme.
+
+Lehre: eine Probe, die ja/nein meldet, muss ihre Annahme mitliefern.
+"MISSING" ohne die Liste der vorhandenen Eintraege war genau das nicht.
