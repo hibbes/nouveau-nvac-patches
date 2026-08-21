@@ -39,33 +39,17 @@ Withdrawn since v3
 
 On 2/3, and the two places where it differs from the sketch
 
-  Both differences follow from the same detail, and I want to state them
-  openly rather than let them be found in the diff.
-
-  The sketch checks chan->killed before setting ->ready. Both sides of a
-  handover like this have to store their own flag before they load the
-  other's, or one interleaving loses the kill: arm() reads killed == 0,
-  kill() sets killed and reads ready == false, arm() then sets ready, and
-  neither side calls nouveau_fence_context_kill(). That outcome is reachable
-  under sequential consistency, so it is not a barrier problem: no barrier
-  can forbid it, because barriers order accesses and do not reorder them.
-  The two accesses have to be the other way round in program order. Swapped,
-  and with an smp_mb() on each side, this is exactly
-  tools/memory-model/litmus-tests/SB+fencembonceonces.litmus.
-
-  The sketch also holds fctx->lock across the handover. The kill side cannot
-  join that lock, because reaching fctx->lock is the thing this patch has to
-  avoid until the context is built: chan->fence is published by the
-  allocation, before nouveau_fence_context_new() calls spin_lock_init(). So
-  ->ready is read outside the lock. That also answers the open question at
-  the end of the sketch: it does not have to be atomic_t, a bool is enough,
-  but it does have to be published with release and read with acquire, so
-  that a caller which sees it set also sees the initialised lock and list.
-
-  The idea is Lyude's and the patch says so. I would rather be told I have
+  The sketch checks chan->killed before setting ->ready, but each side has
+  to store its own flag before loading the other's, or one interleaving
+  loses the kill even under sequential consistency; swapped, with smp_mb()
+  on both sides, it is the store-buffering pattern. And the kill side
+  cannot take fctx->lock, because that lock is exactly what must not be
+  touched before the context is built, so ->ready is a plain bool read
+  outside the lock, published with release and read with acquire. The
+  commit message has the full argument, and I would rather be told I have
   the memory model wrong than quietly ship a handshake that drops kills.
 
-  On the aside about writing the respin without Claude
+On the aside about writing the respin without Claude
 
   This work is AI assisted, as the Assisted-by trailers say.
 
