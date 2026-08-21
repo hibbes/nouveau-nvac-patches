@@ -62,3 +62,32 @@ Pushbuf macht, nicht heruntergestuft werden.
 
 Der Fall wird getrennt untersucht. Belege: `/home/neo/fab-443-logs/` und
 `/home/neo/fab-lag-log/`, 99 Treffer ueber drei Logs und zwei Kernel.
+
+## Lastversuch 21.08., 16:42 bis 16:59
+
+Versuch, den Fehler mit gezielter Last zu provozieren (`fence-storm.sh`):
+viele kleine GLX-Fenster, die kommen, 5 bis 20 s laufen und gehen, auf
+7.2.0-gentoo-nvac-soak mit scharfer 0060-probe.
+
+| Lauf | Dauer | Fenster gleichzeitig | gestartet | CACHE_ERROR | 0060-probe |
+|---|---|---|---|---|---|
+| Probe | 120 s | 8 | 76 | 0 | 0 |
+| voll | 600 s | 12 | 557 | 0 | 0 |
+
+Jeder Pushbuf-Submit setzt einen Kernel-Fence (`nouveau_gem.c:950`), und
+`nv84_fence_emit32/sync32` schreiben 0x0060 UNBEDINGT bei jedem Fence.
+Bei 12 Fenstern ohne Vsync sind das grob 1,5 Millionen Schreibvorgaenge
+in zehn Minuten. Kein Treffer. Die Menge loest es also nicht aus.
+
+Die Fremdmaschine (dieselbe Karte, 0ac380b1) hatte ueber 30 Treffer am Tag
+bei einem Bruchteil dieses Verkehrs. Besitzer der Kanaele dort: kwin_x11
+58x, Xorg 22x, kwin_wayland 6x, plasmashell 6x, Renderer 6x, ksplashqml
+1x. Kein normaler GL-Client. Mesa-Relnotes 25.0 bis 26.1 zeigen fuer
+nouveau/nv50 nur Refactoring am Screen-Setup, nichts am Pushbuf-Pfad.
+
+Staerkster verbliebener Unterschied: Xorg. Auf Xorg teilen sich alle
+Clients den Kanal des X-Servers, der Compositor faehrt seine Komposition
+darueber. Hier nicht installiert, also nicht nachstellbar.
+
+Stand: Probe bleibt scharf und laeuft im Alltag mit. Ein Xorg-Nachbau
+lohnt erst, wenn sie auch nach Tagen nichts zeigt.
