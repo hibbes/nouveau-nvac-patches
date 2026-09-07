@@ -1,0 +1,37 @@
+#!/sbin/openrc-run
+# Boot-S3: ein prophylaktischer deep-S3-Zyklus kurz nach dem Boot, bevor der erste
+# Display-Zyklus des Nutzers den EVO-Fetch-Park ausloesen kann (Experiment 07.09.2026).
+# Das Skript wartet auf labwc und Uptime 75 s, faehrt dann rtcwake -m mem -s 30 und
+# startet beide Waechter (nv-watchdog, nvac-s3-unwedge) wieder. Details:
+# nouveau-nvac-patches/docs/specs/2026-09-07-nvac-boot-s3-design.md
+# "started" heisst hier nur: Skript wurde gestartet; es beendet sich nach dem Zyklus selbst.
+# Abschalten: touch /etc/nvac-boot-s3.disabled  oder  rc-update del nvac-boot-s3 default
+# Log: /var/log/nvac-boot-s3.log, Historie: /var/lib/nvac-boot-s3/history.log
+
+description="Boot-S3: prophylaktischer S3-Zyklus nach dem Boot gegen den ersten EVO-Wedge"
+pidfile="/run/nvac-boot-s3.pid"
+script="/usr/local/bin/nvac-boot-s3.sh"
+
+depend() {
+	need localmount
+	after nvac-s3-unwedge nv-watchdog greetd
+}
+
+start() {
+	if [ ! -x "$script" ]; then
+		einfo "$script fehlt, ueberspringe"
+		return 0
+	fi
+	ebegin "Starte nvac-boot-s3 (wartet auf labwc, dann ein S3-Zyklus)"
+	start-stop-daemon --start --background --make-pidfile \
+		--pidfile "$pidfile" --exec /bin/bash -- "$script"
+	# Nie fatal werden: ein Experiment darf den Boot nicht aufhalten.
+	eend 0
+}
+
+stop() {
+	ebegin "Stoppe nvac-boot-s3"
+	start-stop-daemon --stop --quiet --pidfile "$pidfile" 2>/dev/null
+	rm -f "$pidfile"
+	eend 0
+}
