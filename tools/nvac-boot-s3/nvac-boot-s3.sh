@@ -35,7 +35,7 @@ FORCE=${NBS_FORCE:-0}
 log() { printf '%s %s\n' "$(date +%Y-%m-%dT%H:%M:%S)" "$*" >> "$LOG"; echo "$*"; }
 uptime_s() { cut -d' ' -f1 "$UPTIME_FILE" | cut -d. -f1; }
 alert() { log "alert: $*"; klaus-send --plain "nvac-boot-s3: $*" >/dev/null 2>&1 || true; }
-count_evo_timeouts() { dmesg 2>/dev/null | grep -c -E 'base-[0-9]: timeout|core notifier timeout'; }
+EVO_RE='base-[0-9]: timeout|core notifier timeout'
 nic_ok() { ping -c 2 -W 2 -I "$IFACE" "$GW" >/dev/null 2>&1; }
 
 mkdir -p "$RUN_DIR" "$STATE_DIR" 2>/dev/null || true
@@ -86,7 +86,7 @@ log "armed: labwc pid=$PID uptime=${UP}s"
 
 # Marker VOR dem S3: ein haengender Resume darf nichts wiederholen.
 touch "$RUN_DIR/done"
-BASE=$(count_evo_timeouts)
+BASE_LINES=$(dmesg 2>/dev/null | wc -l)
 
 RESTARTED=0
 restart_watchdogs() {
@@ -108,10 +108,21 @@ DT=$(awk -v a="$T0" -v b="$(date +%s.%N)" 'BEGIN{printf "%.1f", b-a}')
 log "rtcwake rc=$RC dt=${DT}s"
 restart_watchdogs
 
-# Nachpruefung: EVO-Timeouts seit der Baseline, NIC ueber das Gateway.
+# Nachpruefung: EVO-Timeouts seit der Baseline, getrennt nach VOR und NACH "PM: suspend exit".
+# Ein Timeout beim Suspend-Eintritt heisst: der erste Display-Zyklus dieses Boots hat im
+# Teardown des Boot-S3 geparkt, und derselbe S3 hat es geheilt (das Experiment greift).
+# Nur Timeouts NACH dem Resume sind eine Anomalie.
 sleep "$SETTLE"
-NOW=$(count_evo_timeouts)
-EVO=$((NOW - BASE)); [ "$EVO" -lt 0 ] && EVO=0    # dmesg-Ring geleert -> nichts Neues zaehlbar
+NOW_LINES=$(dmesg 2>/dev/null | wc -l)
+if [ "$NOW_LINES" -ge "$BASE_LINES" ]; then
+    DELTA=$(dmesg 2>/dev/null | tail -n +$((BASE_LINES + 1)))
+else
+    DELTA=$(dmesg 2>/dev/null)     # Ring wurde geleert -> alles nehmen
+fi
+ENTRY=$(printf '%s\n' "$DELTA" | awk '/PM: suspend exit/{exit} {print}' | grep -c -E "$EVO_RE")   # Zeilen VOR dem Resume
+TOTAL=$(printf '%s\n' "$DELTA" | grep -c -E "$EVO_RE")
+POST=$((TOTAL - ENTRY)); [ "$POST" -lt 0 ] && POST=0
+[ "$ENTRY" -gt 0 ] && log "park: consumed during suspend entry ($ENTRY timeouts before PM: suspend exit), healed by this S3"
 NIC=ok
 if ! nic_ok; then
     sleep "$NIC_GRACE"
@@ -123,12 +134,12 @@ if ! nic_ok; then
     fi
 fi
 
-log "RESULT rc=$RC dt=${DT}s evo_timeouts=$EVO nic=$NIC"
+log "RESULT rc=$RC dt=${DT}s evo_timeouts_entry=$ENTRY evo_timeouts_post=$POST nic=$NIC"
 BOOT=$(date -d "@$(( $(date +%s) - $(uptime_s) ))" +%Y-%m-%dT%H:%M:%S 2>/dev/null || echo "?")
-printf '%s boot=%s kernel=%s rc=%s dt=%ss evo_timeouts=%s nic=%s forced=%s\n' \
-    "$(date +%Y-%m-%dT%H:%M:%S)" "$BOOT" "$(uname -r)" "$RC" "$DT" "$EVO" "$NIC" "$FORCE" >> "$STATE_DIR/history.log"
+printf '%s boot=%s kernel=%s rc=%s dt=%ss park=%s post=%s nic=%s forced=%s\n' \
+    "$(date +%Y-%m-%dT%H:%M:%S)" "$BOOT" "$(uname -r)" "$RC" "$DT" "$ENTRY" "$POST" "$NIC" "$FORCE" >> "$STATE_DIR/history.log"
 [ "$RC" != 0 ] && alert "rtcwake rc=$RC dt=${DT}s, S3-Zyklus fehlgeschlagen, Waechter neu gestartet"
-[ "$EVO" -gt 0 ] && alert "$EVO EVO-Timeouts nach dem Boot-S3 (rc=$RC), bitte /var/log/nvac-boot-s3.log pruefen"
+[ "$POST" -gt 0 ] && alert "$POST EVO-Timeouts NACH dem Resume des Boot-S3 (rc=$RC), bitte /var/log/nvac-boot-s3.log pruefen"
 [ "$NIC" != ok ] && alert "NIC $IFACE nach Boot-S3: $NIC"
 [ "$RC" != 0 ] && exit 1
 exit 0

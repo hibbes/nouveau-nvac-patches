@@ -49,14 +49,21 @@ Kopien der beiden installierten Dateien liegen unter `tools/nvac-boot-s3/` im Re
    30 s statt der 40 s des Watchdogs: gesunder Suspend-Eintritt 1 bis 3 s, geparkter
    gemessen 9,2 s (21.08.) und 10,6 s (07.09.). Der Watchdog behaelt seine 40 s.
 6. Nachpruefung nach 10 s Ruhe: neue EVO-Timeouts (`base-N: timeout`,
-   `core notifier timeout`) im dmesg-Delta zaehlen; NIC-Check `ping -c 2 -W 2 -I enp0s10
+   `core notifier timeout`) im dmesg-Delta zaehlen, getrennt in VOR und NACH
+   `PM: suspend exit`. Timeouts beim Suspend-Eintritt heissen: der erste Display-Zyklus
+   dieses Boots hat im Teardown des Boot-S3 geparkt und derselbe S3 hat ihn geheilt
+   (Logzeile `park: consumed during suspend entry`, Historie `park=N`); das ist der
+   erwartete Erfolgsfall des Experiments, kein Alarm. Nur Timeouts nach dem Resume
+   (`post=N`) sind eine Anomalie. Erster Boot 08.09.2026 18:59 lieferte genau diesen
+   Fall (park=1, post=0); NIC-Check `ping -c 2 -W 2 -I enp0s10
    192.168.1.1`, bei Fehlschlag nach 5 s Gnadenfrist ein zweiter Versuch, dann einmal
    `ip link set enp0s10 down` und `up` (forcedeth-Falle vom 12.07.2026) und erneut pingen.
-7. Ergebnis: Zeile `RESULT rc=<n> dt=<s> evo_timeouts=<n> nic=<ok|bounced|fail>` im Log
+7. Ergebnis: Zeile `RESULT rc=<n> dt=<s> evo_timeouts_entry=<n> evo_timeouts_post=<n> nic=<ok|bounced|fail>` im Log
    `/var/log/nvac-boot-s3.log` und eine Zeile je Boot in
    `/var/lib/nvac-boot-s3/history.log`.
 8. Telegram (`klaus-send --plain`) NUR bei Anomalie: rtcwake-Rueckgabe ungleich 0,
-   EVO-Timeouts nach dem Resume, NIC-Bounce oder NIC-Ausfall. Kein Erfolgs-Ping.
+   EVO-Timeouts NACH dem Resume, NIC-Bounce oder NIC-Ausfall. Kein Erfolgs-Ping, kein
+   Ping fuer einen beim Suspend-Eintritt konsumierten Park.
 
 ## Abschalten
 

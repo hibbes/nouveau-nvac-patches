@@ -21,7 +21,7 @@ mk_env() {
   : > "$T/calls.log"
   echo 0 > "$T/ping.fails"
   echo 0 > "$T/dmesg.calls"
-  export FAKE_LABWC=1 FAKE_BUMP=0 FAKE_RTCWAKE_RC=0 FAKE_DMESG_TIMEOUTS_AFTER=0
+  export FAKE_LABWC=1 FAKE_BUMP=0 FAKE_RTCWAKE_RC=0 FAKE_DMESG_TIMEOUTS_AFTER=0 FAKE_DMESG_TIMEOUTS_ENTRY=0
   cat > "$T/bin/pgrep" <<'S'
 #!/bin/bash
 echo "pgrep $*" >> "$T/calls.log"
@@ -43,7 +43,11 @@ S
 n=$(cat "$T/dmesg.calls"); n=$((n+1)); echo "$n" > "$T/dmesg.calls"
 echo "dmesg call=$n" >> "$T/calls.log"
 echo "[  1.000000] nouveau 0000:02:00.0: NVIDIA MCP79/MCP7A (0ac080b1)"
-if [ "$n" -ge 2 ]; then for i in $(seq 1 "$FAKE_DMESG_TIMEOUTS_AFTER"); do echo "[ 90.$i] nouveau 0000:02:00.0: drm: base-1: timeout"; done; fi
+if [ "$n" -ge 2 ]; then
+  for i in $(seq 1 "${FAKE_DMESG_TIMEOUTS_ENTRY:-0}"); do echo "[ 79.$i] nouveau 0000:02:00.0: drm: core notifier timeout"; done
+  echo "[ 86.6] PM: suspend exit"
+  for i in $(seq 1 "$FAKE_DMESG_TIMEOUTS_AFTER"); do echo "[ 90.$i] nouveau 0000:02:00.0: drm: base-1: timeout"; done
+fi
 exit 0
 S
   cat > "$T/bin/ping" <<'S'
@@ -106,9 +110,9 @@ rc-service nv-watchdog start
 rc-service nvac-s3-unwedge start
 ping -c 2 -W 2 -I enp0s10 192.168.1.1"
 [ "$(calls)" = "$EXP" ] && ok "happy_path_sequence" || { fail "happy_path_sequence"; echo "--- got:"; calls; }
-[ "$RC" = 0 ] && has_log "RESULT rc=0 " && has_log "evo_timeouts=0" && has_log "nic=ok" && ok "happy_path_result_line" || fail "happy_path_result_line"
+[ "$RC" = 0 ] && has_log "RESULT rc=0 " && has_log "evo_timeouts_entry=0 evo_timeouts_post=0" && has_log "nic=ok" && ok "happy_path_result_line" || fail "happy_path_result_line"
 [ -e "$T/run/done" ] && ok "happy_path_marker_exists" || fail "happy_path_marker_exists"
-[ "$(wc -l < "$T/state/history.log")" = 1 ] && grep -q "rc=0" "$T/state/history.log" && ok "happy_path_history_line" || fail "happy_path_history_line"
+[ "$(wc -l < "$T/state/history.log")" = 1 ] && grep -q "rc=0 .*park=0 post=0" "$T/state/history.log" && ok "happy_path_history_line" || fail "happy_path_history_line"
 ! grep -q klaus-send "$T/calls.log" && ok "happy_path_no_telegram" || fail "happy_path_no_telegram"
 rm -rf "$T"
 
@@ -132,7 +136,12 @@ rm -rf "$T"
 
 # 10 EVO-Timeouts nach dem Resume: zaehlen + Alarm
 mk_env 80 0; export FAKE_DMESG_TIMEOUTS_AFTER=2; run
-has_log "evo_timeouts=2" && grep -q klaus-send "$T/calls.log" && ok "evo_timeouts_after_resume_alert" || { fail "evo_timeouts_after_resume_alert"; cat "$T/log"; }
+has_log "evo_timeouts_post=2" && grep -q klaus-send "$T/calls.log" && ok "evo_timeouts_after_resume_alert" || { fail "evo_timeouts_after_resume_alert"; cat "$T/log"; }
+rm -rf "$T"
+
+# 10b Park beim Suspend-Eintritt (vor PM: suspend exit) = konsumiert, kein Alarm
+mk_env 80 0; export FAKE_DMESG_TIMEOUTS_ENTRY=1; run
+has_log "park: consumed during suspend entry" && has_log "evo_timeouts_entry=1 evo_timeouts_post=0" && grep -q "park=1 post=0" "$T/state/history.log" && ! grep -q klaus-send "$T/calls.log" && [ "$RC" = 0 ] && ok "park_consumed_at_entry_no_alert" || { fail "park_consumed_at_entry_no_alert"; cat "$T/log"; }
 rm -rf "$T"
 
 # 11 FORCE uebergeht Frischboot, S3-Zaehler und Marker, nicht die Sperrdatei
