@@ -93,3 +93,38 @@ Alle Pfade und Schwellen sind per `NBS_*`-Umgebungsvariablen ueberschreibbar, al
 externen Kommandos werden ueber PATH aufgeloest (`NBS_PATH_PREFIX` fuer Shims). Der
 Selbsttest prueft Skip-Faelle, Wartebedingung, exakte Kommando-Reihenfolge, Neustart
 der Waechter auch bei rtcwake-Fehler, NIC-Bounce, Timeout-Alarm, FORCE und Lock.
+
+## Abgeschaltet am 13.09.2026 (Messpause fuer den 7.2.5-Test)
+
+Sperrdatei `/etc/nvac-boot-s3.disabled` gesetzt, der Dienst bleibt im Runlevel und
+schreibt je Boot `skip: disabled` ins Log, damit der Messarm "aus" belegbar ist.
+
+**Warum**, Auswertung per Workflow mit adversarialer Gegenpruefung:
+
+- Nur 2 informative Boots mit Dienst (08.09. park=1, 13.09. park=0), p = 0,096 gegen die
+  unabhaengig nachgerechnete Basisrate 20/29 = 69 Prozent (Wilson 95 Prozent 51 bis 83).
+  Kein Signal.
+- Mit eingeschaltetem Dienst ist die Frage "heilt ein neuer Kernel" prinzipiell nicht
+  messbar: er ersetzt das erste Wiedereinschalten (Mehrheit der Episoden) durch ein
+  Resume-Modeset, das nie gewedget hat; der gemessene Teardown provoziert und heilt im
+  selben Vorgang; die Baseline beginnt erst bei Uptime 75 s. park>=1 bleibt gueltige
+  Positiv-Evidenz, park=0 beweist fast nichts. Entdeckung je Boot rund 0,69 (aus) gegen
+  0,14 (an), also 3 bis 4 Boots statt rund 20 fuer dieselbe Aussage.
+- 7.2.5 heilt nachweislich nicht: 0 Treffer fuer `dispnv50` im Upstream-Delta, alle 19
+  nouveau-Dateien im GSP-RM-Zweig (Turing aufwaerts), nv50-Disp und `nvac_chipset`
+  byteidentisch, `kernel/power` unveraendert. Der Test wird also sehr wahrscheinlich
+  bestaetigen, dass der Bug noch da ist; bei p=0,69 im Mittel nach 1,4 Boots.
+
+**Vorher gehaertet**, weil der Waechter `nvac-s3-unwedge` jetzt das alleinige Netz ist:
+Netzpruefung mit einmaligem Link-Bounce, Nachlesen der EVO-Register nach dem Resume,
+Ergebnismeldung per Telegram nach JEDER Heilung, RESULT-Zeile im Log. Siehe
+`tools/nvac-s3-unwedge/`.
+
+**Messrezept je Boot:** `sudo awk '!seen[$0]++' /var/log/nvac-s3-unwedge.log | tail`
+zeigt WEDGE und die neue RESULT-Zeile (rc, tco, park, nic, kernel). Ein WEDGE unter 7.2.5
+beantwortet die Frage (heilt nicht). 4 saubere Boots: "nicht mehr reproduzierbar"
+(Restwahrscheinlichkeit 0,8 Prozent am Punktschaetzer, 5,8 Prozent an der
+Wilson-Untergrenze), 6 saubere Boots tragen die Aussage auch an der Untergrenze.
+Zaehlung beginnt bei jedem Kernel-Bump neu.
+
+**Wiedereinschalten:** `sudo rm -f /etc/nvac-boot-s3.disabled` (wirkt ab dem naechsten Boot).
